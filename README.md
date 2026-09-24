@@ -1,69 +1,33 @@
 <div align="center">
 
-# Story Skills
+# Story Toolkit
 
-**Agent Skills for planning, tracking, and drafting fiction in markdown.**
+**Agent skills and a companion CLI for planning, tracking, and drafting fiction in markdown.**
 
-Story Skills gives agents a shared project format for fiction: a story bible, characters, worldbuilding, factions, artifacts, plot arcs, scenes, continuity state, promises and payoffs, timelines, and chapter drafts. Everything is plain markdown with YAML frontmatter, packaged as standard Agent Skills with Codex and Claude Code plugins.
+Story Toolkit gives agents a shared project format for fiction: a story bible, characters, worldbuilding, factions, artifacts, plot arcs, scenes, continuity state, promises and payoffs, timelines, and chapter drafts. Everything is plain markdown with YAML frontmatter, and a deterministic `story` CLI keeps the story bible a checkable contract.
 
-The companion `story` CLI treats the story bible as a checkable contract. Its **continuity engine** catches dead characters walking, payoffs that land before their setup, unfired Chekhov guns, and stale story state, deterministically, before a reader finds them.
+This is the `@dkylepeppers-alt/story-toolkit` fork, in active development toward its first release candidate. The fork owns its project format and its distribution: one release will own the CLI, generated skill bundles, and agent definitions for one owned installation. See [`docs/architecture/capability-ledger.md`](docs/architecture/capability-ledger.md) for how existing capabilities are carried over, and [`docs/superpowers/specs/2026-09-24-story-toolkit-design.md`](docs/superpowers/specs/2026-09-24-story-toolkit-design.md) for the design being implemented.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Agent Skills](https://img.shields.io/badge/Agent_Skills-SKILL.md-blue)](https://agentskills.io)
-[![Codex](https://img.shields.io/badge/Codex-plugin-10A37F)](https://developers.openai.com/codex)
-[![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-blueviolet)](https://docs.anthropic.com/en/docs/claude-code)
 
 </div>
 
 ---
 
-## Quick start
+## Status and running it today
 
-Install the plugin in **Codex** or **Claude Code**:
-
-```shell
-# Codex
-codex plugin marketplace add danjdewhurst/story-skills
-codex plugin add story-skills@story-skills
-
-# Claude Code (type these inside a Claude Code session, not a shell)
-/plugin marketplace add danjdewhurst/story-skills
-/plugin install story-skills@story-skills
-```
-
-For any other agent that supports `SKILL.md`, use the Agent Skills CLI:
+There is no published package yet. Run the CLI from a checkout (Node 22 or newer):
 
 ```shell
-npx skills add danjdewhurst/story-skills   # or: bunx skills add danjdewhurst/story-skills
+bun install
+bun run story -- --help
 ```
 
-Then ask your agent to **"Start a new story"**. Per-agent instructions for GitHub Copilot, Cursor, Windsurf, Gemini CLI, OpenCode, and others are under [More install options](#more-install-options).
-
-### Or let your agent install it
-
-Paste this prompt into your coding agent. It works out which agent it is and uses the matching install method:
-
-```text
-Install the Story Skills bundle from https://github.com/danjdewhurst/story-skills.
-
-First, work out which agent you are, then use the matching method below. If a command fails or you can't run it, tell me the exact command to run myself.
-
-- Claude Code: run `claude plugin marketplace add danjdewhurst/story-skills`, then `claude plugin install story-skills@story-skills`. If the `claude` CLI isn't available, tell me to type `/plugin marketplace add danjdewhurst/story-skills` and then `/plugin install story-skills@story-skills` in this session.
-- Codex: run `codex plugin marketplace add danjdewhurst/story-skills`, then `codex plugin add story-skills@story-skills`.
-- Gemini CLI: run `gemini skills install https://github.com/danjdewhurst/story-skills.git`.
-- Any other agent that supports SKILL.md (GitHub Copilot, Cursor, Windsurf, OpenCode, and others): run `npx skills add danjdewhurst/story-skills`, or `bunx skills add danjdewhurst/story-skills` if only Bun is installed. If that doesn't support you, clone the repository to a temporary directory and copy every folder in its `skills/` directory into your skills directory:
-  - GitHub Copilot: `.github/skills/` in this project, or `~/.copilot/skills/` globally
-  - Cursor: `.agents/skills/` in this project
-  - Windsurf: `.windsurf/skills/` in this project, or `~/.codeium/windsurf/skills/` globally
-  - OpenCode: `.opencode/skills/` in this project, or `~/.config/opencode/skills/` globally
-  - Anything else: your documented skills directory, or `.agents/skills/` in this project
-
-Prefer a project install unless I asked for a global one. If you can't tell which agent you are, ask me before installing. When you're done, tell me what you installed, where it went, and whether I need to restart or reload you for the skills to show up.
-```
+Installation as an owned package (release tarball plus `story setup` for your agent host) lands with the release candidate. Until then, this README describes the current toolkit; install instructions will return with the first release.
 
 ## The continuity engine
 
-Long-range consistency is what language models are worst at, and prompting can't fix it. Story Skills makes it deterministic: character deaths, promises and payoffs, open questions, scene casts, and durable knowledge and object state live in frontmatter, and `story continuity` treats contradictions the way a compiler treats type errors.
+Long-range consistency is what language models are worst at, and prompting can't fix it. Story Toolkit makes it deterministic: character deaths, promises and payoffs, open questions, scene casts, and durable knowledge and object state live in frontmatter, and `story continuity` treats contradictions the way a compiler treats type errors.
 
 [`examples/the-unraveled-thread/`](examples/the-unraveled-thread/) is a deliberately broken mystery. Every file is well-formed, so it passes `story validate` and `story links` cleanly, but the story itself doesn't hold together:
 
@@ -102,21 +66,11 @@ Every finding is exact, file-addressed, and reproducible, and CI asserts this ou
 | **submission** | Checks submission readiness, drafts the query letter, pitch, comp titles, synopsis, and blurb, builds the Shunn manuscript, and tracks queries and responses | *"Help me query agents"* |
 | **story-maintenance** | Runs deterministic CLI checks for validation, continuity, reports, indexing, links, word counts, import, and export | *"Validate my story project"* |
 
-For stronger prose, pair **chapter-writing** with [**better-writing**](https://github.com/forjd/better-writing). It adds voice calibration, anti-generic writing checks, and a final prose-quality pass, and installs the same way:
-
-```shell
-npx skills add forjd/better-writing
-```
+These workflows consolidate into ten core skills (`story-workflow`, `story-planning`, `story-writing`, `story-review`, `story-world`, `story-memory`, `story-research`, `story-series`, `story-image-prompts`, `story-publishing`) as the toolkit build proceeds; the capability ledger maps every existing method to its new home.
 
 ## Companion CLI
 
-The optional `story` CLI handles deterministic project maintenance while the skills handle the creative work. It needs Node 18 or newer and has no runtime dependencies. It isn't on the npm registry yet, so run it straight from GitHub:
-
-```shell
-npx --yes --package github:danjdewhurst/story-skills story --help
-```
-
-From a clone, use `bun install` and then `bun run story --help`. Copied-skill installs don't need either: `story-maintenance` bundles a `scripts/story.js` fallback that agents run with Node.
+The `story` CLI handles deterministic project maintenance while the skills handle the creative work. It needs Node 22 or newer and has no runtime dependencies. From a checkout, use `bun install` and then `bun run story --help` (or `node bin/story.js`).
 
 The CLI is for maintenance only. Agents write story content directly to markdown files and never create project-local build or generator scripts to emit the story.
 
@@ -174,20 +128,13 @@ Behavior notes:
 
 For a complete starter transcript, read [`docs/first-20-minutes.md`](docs/first-20-minutes.md). For the project contract, read [`docs/schema-v2.md`](docs/schema-v2.md) and [`schemas/story.schema.json`](schemas/story.schema.json).
 
-## Write a book with pull requests
+## Optional automation templates
 
-A story project with deterministic checks is one an agent can advance unattended. The [`templates/github/`](templates/github/) workflows turn a story repository into a self-drafting book:
-
-- [`story-checks.yml`](templates/github/story-checks.yml) runs `story validate`, `story links`, `story continuity`, and `story report --actionable` on every push and pull request, so a chapter PR can't merge with a continuity contradiction.
-- [`draft-next-chapter.yml`](templates/github/draft-next-chapter.yml) runs [Claude Code](https://github.com/anthropics/claude-code-action) on a schedule. It asks `story next` for the next action, drafts the next chapter with the chapter-writing skill, updates scene records and continuity state, runs the maintenance checks, and opens a pull request for review.
-
-Copy both files into `.github/workflows/` in the repository that holds your story project, add an `ANTHROPIC_API_KEY` secret, and review one chapter PR each morning.
-
-GitHub doesn't start `story-checks.yml` for pull requests opened with the built-in `GITHUB_TOKEN`, so the draft workflow runs the same checks itself after drafting. Pass a personal access token as `github_token` if you also want the checks workflow to run on those PRs.
+[`templates/github/`](templates/github/) contains optional GitHub Actions workflows users can copy into a story repository: one runs the deterministic checks on every push and pull request, and one drafts a chapter on a schedule and opens a pull request for review. Both are being updated for the toolkit release; until then they pin the upstream package and may not match this fork's identity.
 
 ## Import an existing manuscript
 
-Most writers don't start from a blank page. `story import` builds a Story Skills project from work in progress:
+Most writers don't start from a blank page. `story import` builds a story project from work in progress:
 
 ```shell
 story import draft.md --title "The Lost Coast" --genre mystery
@@ -246,9 +193,11 @@ Every story element is a markdown file with YAML frontmatter, and the skills cro
 - Relationships and references are kept **bidirectional**.
 - Scene records and continuity state keep character knowledge, object ownership, and setups and payoffs in files, so they carry over between sessions.
 
+The fork's project format (`format: story-toolkit`, `schema-version: 1`, with stable record IDs) replaces this schema as the storage tasks land; schema v2 remains valid in the meantime.
+
 ## Examples
 
-Complete projects generated with Story Skills:
+Complete projects generated with these skills:
 
 - [**The Cormorant Tide**](https://github.com/danjdewhurst/the-cormorant-tide)
 - [**Pippa and the Borrowed Star**](https://github.com/danjdewhurst/christmas-childrens-story), a children's Christmas story (6 chapters, 2,183 words)
@@ -260,138 +209,9 @@ Examples in this repository:
 - [`examples/harbor-of-second-light/`](examples/harbor-of-second-light/): a near-future coastal mystery with memory technology, a posthumous witness arc, populated continuity state, and a drafted first chapter.
 - [`examples/the-unraveled-thread/`](examples/the-unraveled-thread/): a deliberately broken project that demonstrates every class of finding the continuity engine reports.
 
-## More install options
-
-<details>
-<summary><strong>Codex (without the plugin)</strong></summary>
-
-The plugin install in [Quick start](#quick-start) is the recommended path. For local skill authoring, copy the skills in directly; Codex detects repo and user skills automatically:
-
-```shell
-git clone https://github.com/danjdewhurst/story-skills.git
-
-# User-wide
-cp -r story-skills/skills/* ~/.agents/skills/
-
-# Or repo-scoped
-cp -r story-skills/skills/* .agents/skills/
-```
-
-</details>
-
-<details>
-<summary><strong>GitHub Copilot (VS Code)</strong></summary>
-
-[VS Code with Copilot](https://code.visualstudio.com/docs/copilot/customization/agent-skills) discovers skills from several directories:
-
-```shell
-git clone https://github.com/danjdewhurst/story-skills.git
-
-# Copy skills to your project (either works)
-cp -r story-skills/skills/* .github/skills/
-cp -r story-skills/skills/* .agents/skills/
-
-# Or install globally
-cp -r story-skills/skills/* ~/.copilot/skills/
-```
-
-Copilot can activate a skill when your request matches its description, or you can invoke one manually.
-
-</details>
-
-<details>
-<summary><strong>Cursor</strong></summary>
-
-[Cursor](https://www.cursor.com) supports the `SKILL.md` standard:
-
-```shell
-git clone https://github.com/danjdewhurst/story-skills.git
-cp -r story-skills/skills/* .agents/skills/
-```
-
-</details>
-
-<details>
-<summary><strong>Windsurf</strong></summary>
-
-[Windsurf](https://windsurf.com) discovers skills from workspace and global directories:
-
-```shell
-git clone https://github.com/danjdewhurst/story-skills.git
-
-# Copy skills to your project
-cp -r story-skills/skills/* .windsurf/skills/
-
-# Or install globally
-cp -r story-skills/skills/* ~/.codeium/windsurf/skills/
-```
-
-Cascade can invoke a matching skill automatically, or you can use `@skill-name` to invoke one directly.
-
-</details>
-
-<details>
-<summary><strong>Gemini CLI</strong></summary>
-
-[Gemini CLI](https://github.com/google-gemini/gemini-cli) supports the same `SKILL.md` format through the [Agent Skills](https://agentskills.io) standard:
-
-```shell
-# Install all skills globally
-gemini skills install https://github.com/danjdewhurst/story-skills.git
-
-# Or install a single skill (any folder under skills/)
-gemini skills install https://github.com/danjdewhurst/story-skills.git --path skills/chapter-writing
-
-# Or link locally after cloning
-git clone https://github.com/danjdewhurst/story-skills.git
-gemini skills link story-skills/skills
-```
-
-Gemini can activate a skill when your request matches its description.
-
-</details>
-
-<details>
-<summary><strong>OpenCode</strong></summary>
-
-[OpenCode](https://opencode.ai) supports the `SKILL.md` format natively:
-
-```shell
-git clone https://github.com/danjdewhurst/story-skills.git
-
-# Copy skills to your project
-cp -r story-skills/skills/* .opencode/skills/
-
-# Or install globally
-cp -r story-skills/skills/* ~/.config/opencode/skills/
-```
-
-OpenCode also searches common skill paths such as `.claude/skills/`, so it can find project-level skills installed for other agents.
-
-</details>
-
-<details>
-<summary><strong>Other platforms</strong></summary>
-
-These skills follow the open [Agent Skills](https://agentskills.io) standard. If your agent supports the Agent Skills CLI, install the bundle directly:
-
-```shell
-npx skills add danjdewhurst/story-skills   # or: bunx skills add danjdewhurst/story-skills
-```
-
-Use `--skill <name>` to install only specific skills, or `--agent <name>` to target a supported agent. You can also copy the skill folders into any compatible agent's skills directory.
-
-Outside coding agents:
-
-- **Claude.ai or ChatGPT Projects**: add the `SKILL.md` and reference files as project knowledge.
-- **Any LLM API**: include the skill content in the system prompt.
-- **By hand**: the templates, workflows, and project structure are model-agnostic.
-
-</details>
-
 ## Development and releasing
 
-Development uses Bun:
+Development uses Bun (the pinned tool is `bun@1.3.14`; runtime code targets Node >=22):
 
 ```shell
 bun install
@@ -399,35 +219,21 @@ bun run test
 bun run test:coverage
 bun run test:examples   # also validates every example against schemas/story.schema.json
 bun run check:metadata
+bun run check:evals
 ```
 
-`bun run build:fallback` generates the copied-skill fallback CLI from the package entrypoint. After changing CLI source, rebuild it, check it is current, and confirm it runs under Node:
-
-```shell
-bun run build:fallback
-bun run check:fallback
-node skills/story-maintenance/scripts/story.js --help
-```
-
-The `evals/` harness regression-tests the writing skills. Fixtures seed a drafting brief with known canon and known traps. A dependency-free checker verifies that drafts keep the canon and spring none of the traps, a model runner (requires the `claude` CLI) drafts through a real model and judges for invented canon, and a pairwise comparison measures the skill against a no-skill baseline. See [`evals/README.md`](evals/README.md).
+The `evals/` harness regression-tests the writing skills. Fixtures seed a drafting brief with known canon and known traps. A dependency-free checker verifies that drafts keep the canon and spring none of the traps, a model runner drafts through a real model and judges for invented canon, and a pairwise comparison measures the skill against a no-skill baseline. See [`evals/README.md`](evals/README.md).
 
 ```shell
 bun run check:evals      # validate fixture schemas
 bun run eval:selftest    # checker self-test against known-good drafts
-node evals/run-skill.js  # full model run (needs Claude Code credentials)
+node evals/run-skill.js  # full model run (needs model credentials)
 ```
 
-Every published change needs a new version in `package.json`, `.codex-plugin/plugin.json` (Codex's version source), `.claude-plugin/plugin.json` (Claude Code's), and `src/version.js` (printed by `story --version`), so installed users receive updates. Marketplace entries stay unversioned to avoid duplicate version state.
+Identity surfaces must stay aligned: `package.json`, `.codex-plugin/plugin.json`, `.claude-plugin/plugin.json`, both `marketplace.json` files, `src/version.js` (printed by `story --version`), and the `STORY_REF` pins in `templates/github/*.yml`. `bun run check:metadata` enforces this.
 
-Don't bump these by hand. The release script bumps all four, rebuilds the fallback, runs the CI checks, commits `chore: release X.Y.Z`, tags `vX.Y.Z`, pushes, and creates a GitHub release with generated notes. It requires a clean `main` that matches `origin/main` and a logged-in `gh`:
-
-```shell
-bun run release patch            # or minor, major, or an explicit version like 1.2.0
-bun run release patch --dry-run  # run the checks and print the plan without changing anything
-```
-
-Distribution metadata lives in `.claude-plugin/` for Claude Code and in `.codex-plugin/` plus `.agents/plugins/marketplace.json` for Codex. The `plugins/story-skills` symlink is intentional: Codex marketplace entries must point at a child plugin directory, so the symlink exposes the repo-root plugin without duplicating `skills/`.
+The version is a `1.0.0` prerelease until the toolkit is accepted; product release `1.0.0` is reserved. During prereleases, bump all identity surfaces together by hand in one commit — the release script requires a plain `MAJOR.MINOR.PATCH` version and is not used on prereleases. The legacy bundled fallback in `skills/story-maintenance/scripts/story.js` must be rebuilt whenever `src/` changes (`bun run build:fallback`, `bun run check:fallback`); it is not a distribution path and is removed once the packaged CLI replaces it.
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE) for this fork's code and instructions. This toolkit also adapts material from [Creative Writing Skills](https://github.com/haowjy/creative-writing-skills), licensed Apache-2.0; see [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md), [`licenses/Apache-2.0.txt`](licenses/Apache-2.0.txt), and [`provenance/creative-sources.json`](provenance/creative-sources.json). The toolkit is based on the upstream [story-skills](https://github.com/danjdewhurst/story-skills) project by Dan Dewhurst (MIT).

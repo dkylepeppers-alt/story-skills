@@ -176,7 +176,7 @@ describe("check-metadata marketplaces", () => {
         plugins: [{ ...agentsMarketplace.plugins[0], name: "other-name" }]
       }
     };
-    expect(checkMarketplaces(renamed).join("\n")).toContain("has no plugin named story-skills");
+    expect(checkMarketplaces(renamed).join("\n")).toContain(`has no plugin named ${packageJson.name}`);
   });
 
   test("detects a drifted agents plugin path", () => {
