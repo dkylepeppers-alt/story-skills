@@ -1,6 +1,10 @@
+import fs from "node:fs";
+import path from "node:path";
 import { describe, expect, test } from "bun:test";
 import { DEFAULT_MAX_BYTES, TASKS, buildContext, validateRequest } from "../src/context/build.js";
 import { packetBytes } from "../src/context/budget.js";
+import { makeTempDir } from "./helpers.js";
+import { invoke, json } from "./support/cli.js";
 import { makeKnowledgeFixture, makeProject } from "./support/project.js";
 
 function ids(list) {
@@ -409,5 +413,132 @@ describe("byte budget", () => {
     expect(packet.diagnostics.map((item) => item.code)).toContain("CONTEXT_BUDGET_EXCEEDED");
     expect(packet.required[0]).toMatchObject({ id: "constraint:1" });
     expect(packet.required[0].bytes).toBeGreaterThan(3000);
+  });
+});
+
+describe("story context", () => {
+  const command = (p, extra) => ["context", "--task", "draft", "--scene", "scn_cellar", ...extra];
+
+  test("returns the packet and cache status in one JSON envelope", async () => {
+    const p = await contextFixture();
+    const first = json(p.root, command(p, ["--beat", "beat_confession", "--side", "before", "--constraint", "Past tense.", "--constraint", "No adverbs."]));
+    expect(first.code).toBe(0);
+    expect(first.err).toBe("story: context\n");
+    expect(first.parsed).toMatchObject({ command: "context", ok: true, writes: [] });
+    const { packet, cache } = first.parsed.data;
+    expect(ids(packet.items).slice(0, 3)).toEqual(["constraint:1", "constraint:2", "project:prj_00000001"]);
+    expect(packet.target).toEqual({ sceneId: "scn_cellar", beatId: "beat_confession", side: "before" });
+    expect(cache).toMatchObject({ hit: false, stored: true });
+    const again = json(p.root, command(p, ["--beat", "beat_confession", "--side", "before", "--constraint", "Past tense.", "--constraint", "No adverbs."]));
+    expect(again.parsed.data.cache).toMatchObject({ hit: true, key: cache.key });
+    expect(again.parsed.data.packet).toEqual(packet);
+    const nested = json(path.join(p.root, "chapters"), ["context", "--task", "plan", "--include", "que_thief", "--include", "dec_pier", "--max-bytes", "60000"]);
+    expect(nested.code).toBe(0);
+    expect(nested.parsed.data.packet.maxBytes).toBe(60000);
+    expect(nested.parsed.data.packet.items.filter((item) => item.reason === "requested by the caller").map((item) => item.id)).toEqual(["que_thief", "dec_pier"]);
+  });
+
+  test("renders a readable text packet with reasons, sources, impact and omissions", async () => {
+    const p = await contextFixture();
+    const text = invoke(p.root, ["context", "--task", "revise", "--scene", "scn_cellar", "--side", "after", "--max-bytes", "6000"]);
+    expect(text.code).toBe(0);
+    expect(text.out).toContain("Context: revise at scn_cellar after (writer)");
+    expect(text.out).toMatch(/Budget: \d+ of 6000 bytes/);
+    expect(text.out).toContain("Cache: miss");
+    expect(text.out).toContain("## prose:scn_cellar (prose, required)");
+    expect(text.out).toContain("Why: target prose: the target scene");
+    expect(text.out).toContain("Sources: chapters/one.md#scn_cellar [manuscript");
+    expect(text.out).toContain("“I took it,” Zoë says.");
+    expect(text.out).toContain("Omitted (over the byte budget):");
+    const full = invoke(p.root, ["context", "--task", "revise", "--scene", "scn_cellar", "--beat", "beat_handoff", "--side", "before"]);
+    expect(full.out).toContain("Impact (later material; not writer knowledge):");
+    expect(full.out).toContain("## impact:prose:scn_morning (impact-prose)");
+    expect(full.out).toContain("Sources: chapters/one.md#scn_cellar/beat_handoff [manuscript");
+    expect(full.out).toContain("Cache: miss");
+    const draft = invoke(p.root, ["context", "--task", "draft", "--scene", "scn_cellar", "--beat", "beat_confession", "--constraint", "Past tense."]);
+    expect(draft.out).toContain("until before beat_confession");
+    expect(draft.out).toContain("Sources: request#1 [request]");
+    expect(draft.out).toContain("\"rationale\": \"The cellar is lit only by the lantern.\"");
+    const reader = invoke(p.root, ["context", "--task", "review", "--audience", "reader", "--scene", "scn_morning", "--side", "after"]);
+    expect(reader.code).toBe(0);
+    expect(reader.out).toContain("Context: review at scn_morning after (reader)");
+    const plan = invoke(p.root, ["context", "--task", "plan"]);
+    expect(plan.out).toContain("Context: plan (writer)");
+    expect(plan.out).toContain("## outline (outline)\nWhy: reading-order outline of placed scenes\nSources: chapters/one.md [record]; scenes/scn_opening.md [record]");
+    expect(plan.out).toContain('"sceneId": "scn_opening"');
+    expect(plan.out).toContain("Cache: miss");
+  });
+
+  test("invalid invocations exit 2 and write nothing", async () => {
+    const p = await contextFixture();
+    const cases = [
+      [["context"], "--task"],
+      [["context", "--task", "summarize"], "--task"],
+      [["context", "--task", "draft"], "Task draft needs a target scene cursor"],
+      [["context", "--task", "plan", "--beat", "beat_handoff"], "--beat and --side need --scene"],
+      [["context", "--task", "plan", "--side", "after"], "--beat and --side need --scene"],
+      [["context", "--task", "plan", "--max-bytes", "lots"], "--max-bytes must be a positive integer"],
+      [["context", "--task", "plan", "--max-bytes", "0"], "--max-bytes must be a positive integer"],
+      [["context", "--task", "plan", "--audience", "reader"], "audience reader is a reader simulation; use task review"],
+      [["context", "--task", "plan", "--audience", "editor"], "--audience"]
+    ];
+    for (const [argv, message] of cases) {
+      const result = json(p.root, argv);
+      expect(result.code).toBe(2);
+      expect(result.parsed.ok).toBe(false);
+      expect(result.parsed.diagnostics[0].code).toBe("INVALID_INVOCATION");
+      expect(result.parsed.diagnostics.map((item) => item.message).join("\n")).toContain(message);
+    }
+    expect(fs.existsSync(path.join(p.root, ".story"))).toBe(false);
+    const text = invoke(p.root, ["context", "--task", "draft"]);
+    expect(text.code).toBe(2);
+    expect(text.err).toContain("Task draft needs a target scene cursor");
+    expect(text.out).toBe("");
+  });
+
+  test("an unknown target or an over-budget request exits 1 with its findings", async () => {
+    const p = await contextFixture();
+    const ghost = json(p.root, ["context", "--task", "draft", "--scene", "scn_ghost"]);
+    expect(ghost.code).toBe(1);
+    expect(ghost.parsed.ok).toBe(false);
+    expect(ghost.parsed.diagnostics.map((item) => item.code)).toEqual(["TARGET_NOT_FOUND"]);
+    expect(ghost.parsed.data.packet.items).toEqual([]);
+    const over = json(p.root, ["context", "--task", "draft", "--scene", "scn_cellar", "--side", "after", "--max-bytes", "900"]);
+    expect(over.code).toBe(1);
+    expect(over.parsed.diagnostics.map((item) => item.code)).toContain("CONTEXT_BUDGET_EXCEEDED");
+    expect(over.parsed.data.packet.required.map((item) => item.id)).toEqual(["project:prj_00000001", "scene:scn_cellar", "prose:scn_cellar"]);
+    const text = invoke(p.root, ["context", "--task", "draft", "--scene", "scn_cellar", "--side", "after", "--max-bytes", "900"]);
+    expect(text.code).toBe(1);
+    expect(text.err).toContain("Required material that did not fit:");
+    expect(text.err).toContain("- project:prj_00000001 (project,");
+    expect(text.err).toContain("error CONTEXT_BUDGET_EXCEEDED");
+  });
+
+  test("a directory without a story-toolkit project exits 2, and an unwritable cache is a warning", async () => {
+    const legacy = makeTempDir();
+    expect(invoke(legacy, ["init", "Legacy Tale"]).code).toBe(0);
+    const v2 = json(path.join(legacy, "legacy-tale"), ["context", "--task", "plan"]);
+    expect(v2.code).toBe(2);
+    expect(v2.parsed.ok).toBe(false);
+    const fresh = makeTempDir();
+    expect(invoke(fresh, ["init", "Fresh Tale", "--toolkit", "--dir", "fresh"]).code).toBe(0);
+    const bare = json(path.join(fresh, "fresh"), ["context", "--task", "plan"]);
+    expect(bare.code).toBe(0);
+    expect(ids(bare.parsed.data.packet.items)).toEqual([expect.stringMatching(/^project:prj_/)]);
+    const empty = json(makeTempDir(), ["context", "--task", "plan"]);
+    expect(empty.code).toBe(2);
+    expect(empty.parsed.diagnostics[0].code).toBe("PROJECT_NOT_FOUND");
+    const p = await contextFixture();
+    p.write("plot/broken.md", "---\nid: [unclosed\n---\n");
+    const broken = json(p.root, ["context", "--task", "plan"]);
+    expect(broken.code).toBe(2);
+    expect(broken.parsed.diagnostics.map((item) => item.code)).toContain("RECORD_UNPARSEABLE");
+    fs.rmSync(path.join(p.root, "plot", "broken.md"));
+    p.write(".story", "not a directory\n");
+    const blocked = json(p.root, ["context", "--task", "plan"]);
+    expect(blocked.code).toBe(0);
+    expect(blocked.parsed.data.cache).toMatchObject({ hit: false, stored: false });
+    const text = invoke(p.root, ["context", "--task", "plan"]);
+    expect(text.out).toContain("Cache: not stored (Context cache not written");
   });
 });

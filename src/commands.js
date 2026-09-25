@@ -11,6 +11,7 @@ import {
   renameEntityCommand,
   showEntityCommand
 } from "./cli/handlers/entity.js";
+import { contextCommand } from "./cli/handlers/context.js";
 import { addDecisionCommand, listDecisionsCommand, supersedeDecisionCommand } from "./cli/handlers/decision.js";
 import { addFactCommand, listFactsCommand, retractFactCommand } from "./cli/handlers/fact.js";
 import { addIssueCommand, dismissIssueCommand, listIssuesCommand, resolveIssueCommand } from "./cli/handlers/issue.js";
@@ -18,6 +19,7 @@ import { knowledgeCommand } from "./cli/handlers/knowledge.js";
 import { importToolkitCommand, initToolkitCommand } from "./cli/handlers/project.js";
 import { timelineCommand } from "./cli/handlers/timeline.js";
 import { defineCommands } from "./cli/registry.js";
+import { TASKS } from "./context/build.js";
 import {
   buildBook,
   checkProjectContinuity,
@@ -682,6 +684,36 @@ const COMMAND_LIST = [
     ],
     examples: ["story issue dismiss issue_eye_colour --data dismissal.json"],
     run: dismissIssueCommand
+  },
+  {
+    name: "context",
+    path: ["context"],
+    usage: "context --task <task> [--scene <id> [--beat <id>] [--side before|after]]",
+    summary: ["Assemble a bounded, source-grounded context packet", "for one writing task"],
+    project: "discover",
+    mutates: false,
+    returnsResult: true,
+    strictOptions: true,
+    enforceArgs: true,
+    optionSchema: [
+      { name: "project" },
+      { name: "path" },
+      { name: "format", values: ["text", "json"] },
+      { name: "task", required: true, values: TASKS },
+      { name: "scene" },
+      { name: "beat" },
+      { name: "side", values: ["before", "after"] },
+      { name: "audience", values: ["writer", "reader"] },
+      { name: "constraint" },
+      { name: "include" },
+      { name: "max-bytes" }
+    ],
+    examples: [
+      "story context --task draft --scene scn_cellar --beat beat_confession",
+      "story context --task review --audience reader --scene scn_cellar --side after",
+      "story context --task plan --include arc_trust --max-bytes 20000"
+    ],
+    run: contextCommand
   }
 ];
 

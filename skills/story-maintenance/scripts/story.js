@@ -14136,16 +14136,21 @@ var OPTIONS = [
   { name: "shunn", help: ["Apply Shunn manuscript formatting (with --format", "docx)"] },
   { name: "at", value: "<chapter-id>", help: ["Chapter id for schema v2 knowledge"] },
   { name: "data", value: "<json-file>", help: ["Schema-validated record data for fact,", "decision, and issue mutations"] },
-  { name: "beat", value: "<id>", help: ["Beat id inside --scene for knowledge and fact list"] },
+  { name: "beat", value: "<id>", help: ["Beat id inside --scene for knowledge, fact list,", "and context"] },
   { name: "side", value: "<before|after>", help: ["Cursor side for --scene or --beat (default before)"] },
   { name: "include-inactive", help: ["fact list: add proposed, superseded, and", "retracted facts; decision list: add rejected", "and superseded; issue list: add resolved and", "dismissed"] },
   { name: "include-work", help: ["fact list: include fact records under work/"] },
   { name: "record", value: "<id>", help: ["decision list: scoped to this record or the", "whole project; issue list: affecting this record"] },
+  { name: "task", value: "<task>", help: ["context: plan, draft, revise, review, world,", "memory, research, series, image, or publish"] },
+  { name: "audience", value: "<name>", help: ["context: writer (default) or reader; reader", "simulates a first reader at the --scene", "boundary (task review only)"] },
+  { name: "constraint", value: "<text>", repeatable: true, help: ["context: a required caller constraint; repeatable"] },
+  { name: "include", value: "<id>", repeatable: true, help: ["context: retrieve this record as required", "material; repeatable"] },
+  { name: "max-bytes", value: "<n>", help: ["context: UTF-8 byte budget for the packet", "(default 48000)"] },
   { name: "pages", value: "<n>", help: ["Synopsis length for synopsis (1 or 3)"] },
   { name: "actionable", help: ["Include next actions in report"] },
   { name: "number", value: "<n>", help: ["Chapter number for add chapter"] },
   { name: "chapter", value: "<id>", help: ["Chapter id for add scene"] },
-  { name: "scene", value: "<n|id>", help: ["Scene number for add scene; scene id for", "knowledge and fact list"] },
+  { name: "scene", value: "<n|id>", help: ["Scene number for add scene; scene id for", "knowledge, fact list, and context"] },
   { name: "type", value: "<name>", help: ["Entity type for add"] },
   { name: "role", value: "<name>", help: ["Character role for add character"] },
   { name: "status", value: "<name>", help: ["Entity status for add"] },
@@ -14304,10 +14309,10 @@ function parseArgs(argv) {
   return { positionals, options };
 }
 // src/cli/dispatch.js
-import path22 from "node:path";
+import path23 from "node:path";
 
 // src/commands.js
-import path21 from "node:path";
+import path22 from "node:path";
 
 // src/compare.js
 function compareChapters(previous, current) {
@@ -22981,402 +22986,13 @@ function showEntityCommand(ctx) {
   return present(ctx, showEntity(ctx.root(), ctx.parsed.positionals[2]));
 }
 
-// src/memory/decisions.js
-import fs14 from "node:fs";
-import path16 from "node:path";
-
-// src/memory/common.js
-import fs13 from "node:fs";
-import path15 from "node:path";
-function invalid(command, message) {
-  return failure(command, message, "INVALID_INVOCATION", 2);
-}
-function findingsResult(command, diagnostics, exitCode) {
-  return {
-    envelope: envelope({ command, ok: false, diagnostics }),
-    exitCode,
-    text: `${diagnostics.map((item) => item.message).join(`
-`)}
-`
-  };
-}
-function readData(command, cwd, dataPath) {
-  let raw;
-  try {
-    raw = fs13.readFileSync(path15.resolve(cwd, String(dataPath)), "utf8");
-  } catch (error) {
-    return { error: invalid(command, `Cannot read --data ${dataPath}: ${error.message}`) };
-  }
-  let data;
-  try {
-    data = JSON.parse(raw);
-  } catch (error) {
-    return { error: invalid(command, `--data ${dataPath} is not JSON: ${error.message}`) };
-  }
-  if (data === null || typeof data !== "object" || Array.isArray(data)) {
-    return { error: invalid(command, `--data ${dataPath} must hold one JSON object`) };
-  }
-  return { data };
-}
-function hashRefs(command, root, record, field, refresh = false) {
-  if (!Array.isArray(record[field]))
-    return null;
-  for (const source of record[field]) {
-    if (!source || typeof source !== "object" || typeof source.path !== "string")
-      continue;
-    let current;
-    try {
-      current = sourceHash(root, { path: source.path, sceneId: source.scene, beatId: source.beat });
-    } catch (error) {
-      return failure(command, `Source ${source.path} cannot be read: ${error.message}`, "SOURCE_UNREADABLE", 1, [record.id]);
-    }
-    if (source.hash === undefined || refresh)
-      source.hash = current;
-    else if (source.hash !== current) {
-      return failure(command, `Source ${source.path} no longer matches the supplied hash`, "STALE_SOURCE", 3, [record.id]);
-    }
-  }
-  return null;
-}
-function takenNames(root, directory) {
-  const absolute = path15.join(root, directory);
-  return new Set(fs13.existsSync(absolute) ? fs13.readdirSync(absolute) : []);
-}
-function writeResult(command, root, writes, options, success) {
-  try {
-    const recorded = commit(root, writes, options.dryRun === true);
-    return {
-      envelope: envelope({ command, ok: true, data: { ...success.data, dryRun: options.dryRun === true }, diagnostics: success.diagnostics ?? [], writes: recorded }),
-      exitCode: 0,
-      text: options.dryRun === true ? "" : success.text,
-      ...success.log ? { log: success.log } : {}
-    };
-  } catch (error) {
-    return fromStorageError(command, error);
-  }
-}
-
-// src/memory/decisions.js
-var byId = (left, right) => left.id.localeCompare(right.id, "en");
-function list(value) {
-  return Array.isArray(value) ? value.filter((item) => typeof item === "string") : [];
-}
-function decisionEntries(project) {
-  return [...project.records.values()].filter((entry) => entry.type === "decision").sort(byId);
-}
-function projectId(project) {
-  return [...project.records.values()].find((entry) => entry.type === "project")?.id;
-}
-function successors(entries) {
-  const found = new Map;
-  for (const entry of entries) {
-    for (const prior of list(entry.record.supersedes)) {
-      if (!found.has(prior))
-        found.set(prior, []);
-      found.get(prior).push(entry.id);
-    }
-  }
-  return found;
-}
-function summarize(entry, supersededBy) {
-  const record = entry.record;
-  return {
-    id: entry.id,
-    status: record.status,
-    instruction: record.status === "accepted",
-    scopeIds: list(record["scope-ids"]),
-    rationale: record.rationale ?? null,
-    source: record.source ?? null,
-    supersedes: list(record.supersedes),
-    supersededBy: supersededBy.get(entry.id) ?? [],
-    path: entry.path.split("\\").join("/")
-  };
-}
-function summarizeDecisions(project) {
-  const entries = decisionEntries(project);
-  const supersededBy = successors(entries);
-  return entries.map((entry) => summarize(entry, supersededBy));
-}
-function cycles(entries) {
-  const edges = new Map(entries.map((entry) => [entry.id, list(entry.record.supersedes)]));
-  const index = new Map;
-  const low = new Map;
-  const stack = [];
-  const onStack = new Set;
-  const found = [];
-  let counter = 0;
-  const visit2 = (id) => {
-    index.set(id, counter);
-    low.set(id, counter);
-    counter += 1;
-    stack.push(id);
-    onStack.add(id);
-    for (const next of edges.get(id)) {
-      if (!edges.has(next))
-        continue;
-      if (!index.has(next)) {
-        visit2(next);
-        low.set(id, Math.min(low.get(id), low.get(next)));
-      } else if (onStack.has(next)) {
-        low.set(id, Math.min(low.get(id), index.get(next)));
-      }
-    }
-    if (low.get(id) !== index.get(id))
-      return;
-    const component = [];
-    let member;
-    do {
-      member = stack.pop();
-      onStack.delete(member);
-      component.push(member);
-    } while (member !== id);
-    if (component.length > 1 || edges.get(id).includes(id))
-      found.push(component.sort());
-  };
-  for (const entry of entries)
-    if (!index.has(entry.id))
-      visit2(entry.id);
-  return found.sort((left, right) => left[0].localeCompare(right[0], "en"));
-}
-function decisionFindings(project) {
-  const entries = decisionEntries(project);
-  const findings = cycles(entries).map((component) => finding({
-    code: "SUPERSESSION_CYCLE",
-    message: `Decisions supersede each other in a cycle: ${component.join(" -> ")}`,
-    recordIds: component,
-    action: "Edit supersedes so each decision replaces only earlier decisions."
-  }));
-  for (const entry of entries) {
-    for (const target of list(entry.record.supersedes)) {
-      const other = project.records.get(target);
-      if (other && other.type !== "decision") {
-        findings.push(finding({
-          code: "SUPERSEDES_NOT_DECISION",
-          message: `${entry.path}: supersedes ${target}, which is a ${other.type}, not a decision`,
-          recordIds: [entry.id, target],
-          action: "A decision can supersede only another decision."
-        }));
-      }
-    }
-  }
-  return findings;
-}
-var NEW_STATUSES = new Set(["proposed", "accepted", "rejected"]);
-var SUPERSEDABLE = new Set(["proposed", "accepted"]);
-var ACTIVE = new Set(["proposed", "accepted"]);
-function newRecord(project, data, defaults) {
-  const record = { format: FORMAT, "schema-version": SCHEMA_VERSION, id: data.id, type: "decision", ...defaults, ...data };
-  if (record.id === undefined)
-    record.id = allocateId("decision", new Set(project.records.keys()));
-  return record;
-}
-function recordProblem(command, project, record) {
-  if (record.type !== "decision")
-    return invalid(command, `${command} creates records of type decision`);
-  if (typeof record.id !== "string" || !ID_PATTERN.test(record.id))
-    return invalid(command, `Invalid id: ${record.id}`);
-  if (project.records.has(record.id)) {
-    return failure(command, `Record id ${record.id} is already used`, "DUPLICATE_RECORD_ID", 1, [record.id]);
-  }
-  return null;
-}
-function schemaProblem(command, record) {
-  const schema = validateRecord(record);
-  return schema.length > 0 ? findingsResult(command, schema, 2) : null;
-}
-function withEntries(project, entries) {
-  const records = new Map(project.records);
-  for (const entry of entries)
-    records.set(entry.id, entry);
-  return { root: project.root, records, unindexed: project.unindexed };
-}
-function newEntry(root, record) {
-  const relative3 = `decisions/${uniqueFilename(record.id, record.id, takenNames(root, "decisions"))}`;
-  return { id: record.id, type: "decision", path: relative3, record, body: "", valid: true };
-}
-function ownDangling(project, id) {
-  return danglingReferenceDiagnostics(project).filter((item) => item.recordIds[1] === id);
-}
-function addDecision(root, options = {}) {
-  const command = "decision add";
-  if (options.dataPath === undefined)
-    return invalid(command, "Usage: story decision add --data <json-file>");
-  const opened = openProject(root, command);
-  if (opened.error)
-    return opened.error;
-  const { project } = opened;
-  const blocked = loadErrorResult(command, project);
-  if (blocked)
-    return blocked;
-  const read = readData(command, options.cwd ?? process.cwd(), options.dataPath);
-  if (read.error)
-    return read.error;
-  const record = newRecord(project, read.data, {});
-  const problem = recordProblem(command, project, record);
-  if (problem)
-    return problem;
-  if (!NEW_STATUSES.has(record.status)) {
-    return invalid(command, "A new decision is proposed, accepted, or rejected; use decision supersede to replace one");
-  }
-  if (record.supersedes !== undefined) {
-    return invalid(command, "Use story decision supersede <id> to replace a decision; decision add does not write supersedes");
-  }
-  if (!Array.isArray(record["scope-ids"]) || record["scope-ids"].length === 0) {
-    return invalid(command, "A decision needs scope-ids: the project id, record ids, or scene ids it applies to");
-  }
-  const schema = schemaProblem(command, record);
-  if (schema)
-    return schema;
-  const entry = newEntry(root, record);
-  const dangling = ownDangling(withEntries(project, [entry]), record.id);
-  if (dangling.length > 0)
-    return findingsResult(command, dangling, 1);
-  const writes = [{ path: entry.path, action: "create", expectedHash: null, content: stringifyFrontmatter(record) }];
-  return writeResult(command, root, writes, options, {
-    data: summarize(entry, new Map),
-    text: `Added decision ${record.id}: ${entry.path}
-`
-  });
-}
-function describeDecision(item) {
-  const note = item.status === "proposed" ? ", not an instruction" : "";
-  let line = `- ${item.id} [${item.status}${note}] scope ${item.scopeIds.join(", ")}`;
-  if (item.rationale !== null)
-    line += `: ${item.rationale}`;
-  if (item.source !== null)
-    line += ` (source: ${item.source})`;
-  if (item.supersedes.length > 0)
-    line += ` (supersedes ${item.supersedes.join(", ")})`;
-  if (item.supersededBy.length > 0)
-    line += ` (superseded by ${item.supersededBy.join(", ")})`;
-  return line;
-}
-function listDecisions(root, options = {}) {
-  const command = "decision list";
-  const opened = openProject(root, command);
-  if (opened.error)
-    return opened.error;
-  const { project } = opened;
-  const record = options.record ?? null;
-  if (record !== null && !project.records.has(record)) {
-    return failure(command, `No record with id ${record}`, "RECORD_NOT_FOUND", 1, [record]);
-  }
-  const scope = new Set(record === null ? [] : [record, projectId(project)]);
-  const decisions = summarizeDecisions(project).filter((item) => options.includeInactive === true || ACTIVE.has(item.status)).filter((item) => record === null || item.scopeIds.some((id) => scope.has(id)));
-  const diagnostics = decisionFindings(project);
-  const ok = !diagnostics.some((item) => item.severity === "error");
-  const lines = [record === null ? "Decisions:" : `Decisions for ${record}:`];
-  if (decisions.length === 0)
-    lines.push("- None");
-  for (const item of decisions)
-    lines.push(describeDecision(item));
-  if (diagnostics.length > 0) {
-    lines.push("", "Diagnostics:");
-    for (const item of diagnostics)
-      lines.push(`- ${item.severity} ${item.code}: ${item.message}`);
-  }
-  return {
-    envelope: envelope({ command, ok, data: { record, decisions }, diagnostics }),
-    exitCode: ok ? 0 : 1,
-    text: `${lines.join(`
-`)}
-`
-  };
-}
-function supersedeDecision(root, id, options = {}) {
-  const command = "decision supersede";
-  if (!id || options.dataPath === undefined)
-    return invalid(command, "Usage: story decision supersede <id> --data <json-file>");
-  const opened = openProject(root, command);
-  if (opened.error)
-    return opened.error;
-  const { project } = opened;
-  const blocked = loadErrorResult(command, project);
-  if (blocked)
-    return blocked;
-  const prior = project.records.get(id);
-  if (!prior || prior.type !== "decision")
-    return failure(command, `No decision with id ${id}`, "DECISION_NOT_FOUND", 1, [id]);
-  const from = prior.record.status;
-  if (!SUPERSEDABLE.has(from)) {
-    return failure(command, `Decision ${id} is ${from}; only proposed or accepted decisions can be superseded`, "DECISION_TRANSITION_INVALID", 1, [id]);
-  }
-  const read = readData(command, options.cwd ?? process.cwd(), options.dataPath);
-  if (read.error)
-    return read.error;
-  const supplied = read.data.supersedes;
-  if (supplied !== undefined && !(Array.isArray(supplied) && supplied.length === 1 && supplied[0] === id)) {
-    return invalid(command, `A successor supersedes exactly ${id}; leave supersedes out of --data`);
-  }
-  const record = newRecord(project, read.data, { status: "accepted", "scope-ids": prior.record["scope-ids"] });
-  record.supersedes = [id];
-  const problem = recordProblem(command, project, record);
-  if (problem)
-    return problem;
-  if (record.status !== "accepted") {
-    return invalid(command, "A successor is accepted. Record an alternative that is only proposed with decision add");
-  }
-  const schema = schemaProblem(command, record);
-  if (schema)
-    return schema;
-  const entry = newEntry(root, record);
-  const priorRecord = { ...prior.record, status: "superseded" };
-  const after = withEntries(project, [entry, { ...prior, record: priorRecord }]);
-  const problems = [
-    ...ownDangling(after, record.id),
-    ...decisionFindings(after).filter((item) => item.code === "SUPERSESSION_CYCLE" && item.recordIds.includes(record.id))
-  ];
-  if (problems.length > 0)
-    return findingsResult(command, problems, 1);
-  const priorPath = prior.path.split(path16.sep).join("/");
-  const markdown = fs14.readFileSync(path16.join(root, prior.path), "utf8");
-  const writes = [
-    { path: entry.path, action: "create", expectedHash: null, content: stringifyFrontmatter(record) },
-    { path: priorPath, action: "replace", expectedHash: prior.hash, content: replaceFrontmatter(markdown, { ...parseFrontmatter(markdown, prior.path).data, status: "superseded" }) }
-  ];
-  return writeResult(command, root, writes, options, {
-    data: {
-      prior: { id, path: priorPath, from, to: "superseded" },
-      successor: summarize(entry, new Map)
-    },
-    text: `Superseded decision ${id} with ${record.id}
-`
-  });
-}
-
-// src/cli/handlers/decision.js
-function optionValue2(value) {
-  return Array.isArray(value) ? value[value.length - 1] : value;
-}
-function addDecisionCommand(ctx) {
-  return present(ctx, addDecision(ctx.root(), {
-    cwd: ctx.cwd,
-    dataPath: optionValue2(ctx.parsed.options.data),
-    dryRun: isTruthy(ctx.parsed.options["dry-run"])
-  }));
-}
-function listDecisionsCommand(ctx) {
-  const record = optionValue2(ctx.parsed.options.record);
-  return present(ctx, listDecisions(ctx.root(), {
-    includeInactive: isTruthy(ctx.parsed.options["include-inactive"]),
-    record: record === undefined ? undefined : String(record)
-  }));
-}
-function supersedeDecisionCommand(ctx) {
-  return present(ctx, supersedeDecision(ctx.root(), ctx.parsed.positionals[2], {
-    cwd: ctx.cwd,
-    dataPath: optionValue2(ctx.parsed.options.data),
-    dryRun: isTruthy(ctx.parsed.options["dry-run"])
-  }));
-}
-
-// src/memory/facts.js
-import fs16 from "node:fs";
-import path18 from "node:path";
+// src/context/cache.js
+import fs18 from "node:fs";
+import path19 from "node:path";
 
 // src/state/chronology.js
-import fs15 from "node:fs";
-import path17 from "node:path";
+import fs13 from "node:fs";
+import path15 from "node:path";
 
 // src/state/cursor.js
 function normalizeCursor(value) {
@@ -23575,7 +23191,7 @@ function collectSpans(root, chapters) {
   for (const chapter of chapters) {
     let body;
     try {
-      const markdown = fs15.readFileSync(path17.join(root, chapter.path), "utf8");
+      const markdown = fs13.readFileSync(path15.join(root, chapter.path), "utf8");
       body = parseFrontmatter(markdown, chapter.path).body;
     } catch (error) {
       markerDiagnostics.push(issue("CHAPTER_UNREADABLE", "error", `Could not read chapter ${chapter.id}: ${error.message}`, [chapter.id], "structural", "Repair the chapter file so its scene markers can be read."));
@@ -23967,6 +23583,780 @@ function issue(code, severity, message, recordIds, evidence, action2) {
   return { code, severity, message, recordIds, sources: [], evidence, action: action2 };
 }
 
+// src/context/budget.js
+var OVER_BUDGET = "over the byte budget";
+function packetBytes(packet) {
+  return Buffer.byteLength(JSON.stringify(packet), "utf8");
+}
+function itemBytes(item) {
+  return Buffer.byteLength(JSON.stringify(item), "utf8");
+}
+function omission(candidate) {
+  const { item } = candidate;
+  return { id: item.id, kind: item.kind, reason: OVER_BUDGET, retrieval: candidate.retrieval, bytes: itemBytes(item) };
+}
+function compose(header, accepted, omitted, required, diagnostics) {
+  return {
+    ...header,
+    bytes: 0,
+    items: accepted.filter((candidate) => candidate.section === "items").map((candidate) => candidate.item),
+    impact: accepted.filter((candidate) => candidate.section === "impact").map((candidate) => candidate.item),
+    omissions: omitted.map(omission),
+    required,
+    diagnostics
+  };
+}
+function settle(packet) {
+  let bytes = packetBytes(packet);
+  while (packet.bytes !== bytes) {
+    packet.bytes = bytes;
+    bytes = packetBytes(packet);
+  }
+  return packet;
+}
+function fitBudget(header, candidates, maxBytes, diagnostics) {
+  const ordered = candidates.map((candidate, index) => ({ candidate, index })).sort((left, right) => left.candidate.priority - right.candidate.priority || left.index - right.index).map(({ candidate }) => candidate);
+  const required = ordered.filter((candidate) => candidate.required);
+  const optional = ordered.filter((candidate) => !candidate.required);
+  const base = packetBytes({ ...compose(header, [], [], [], diagnostics), bytes: maxBytes });
+  const sizes = new Map(ordered.map((candidate) => [candidate, {
+    item: itemBytes(candidate.item),
+    omission: itemBytes(omission(candidate))
+  }]));
+  const totals = { items: [0, 0], impact: [0, 0], omissions: [0, 0] };
+  const add = (key, bytes, sign) => {
+    totals[key][0] += sign * bytes;
+    totals[key][1] += sign;
+  };
+  const measure = () => Object.values(totals).reduce((total2, [bytes, count]) => total2 + bytes + Math.max(count - 1, 0), base);
+  for (const candidate of required)
+    add(candidate.section, sizes.get(candidate).item, 1);
+  for (const candidate of optional)
+    add("omissions", sizes.get(candidate).omission, 1);
+  if (measure() > maxBytes) {
+    const list = required.map(({ item }) => ({ id: item.id, kind: item.kind, reason: item.reason, sources: item.sources, bytes: itemBytes(item) }));
+    const needed = list.reduce((total2, item) => total2 + item.bytes, 0);
+    const exceeded = {
+      code: "CONTEXT_BUDGET_EXCEEDED",
+      severity: "error",
+      message: `Required context needs ${needed} bytes of items, which with packet overhead exceeds maxBytes ${maxBytes}`,
+      recordIds: list.map((item) => item.id),
+      sources: list.flatMap((item) => item.sources),
+      evidence: "structural",
+      action: "Raise maxBytes, shorten the required constraints or instructions, or narrow the target."
+    };
+    return settle(compose(header, [], optional, list, [...diagnostics, exceeded]));
+  }
+  const accepted = new Set(required);
+  for (const candidate of optional) {
+    const size = sizes.get(candidate);
+    add("omissions", size.omission, -1);
+    add(candidate.section, size.item, 1);
+    if (measure() <= maxBytes) {
+      accepted.add(candidate);
+    } else {
+      add(candidate.section, size.item, -1);
+      add("omissions", size.omission, 1);
+    }
+  }
+  return settle(compose(header, ordered.filter((candidate) => accepted.has(candidate)), optional.filter((candidate) => !accepted.has(candidate)), [], diagnostics));
+}
+
+// src/context/select.js
+import fs17 from "node:fs";
+
+// src/memory/decisions.js
+import fs15 from "node:fs";
+import path17 from "node:path";
+
+// src/memory/common.js
+import fs14 from "node:fs";
+import path16 from "node:path";
+function invalid(command, message) {
+  return failure(command, message, "INVALID_INVOCATION", 2);
+}
+function findingsResult(command, diagnostics, exitCode) {
+  return {
+    envelope: envelope({ command, ok: false, diagnostics }),
+    exitCode,
+    text: `${diagnostics.map((item) => item.message).join(`
+`)}
+`
+  };
+}
+function readData(command, cwd, dataPath) {
+  let raw;
+  try {
+    raw = fs14.readFileSync(path16.resolve(cwd, String(dataPath)), "utf8");
+  } catch (error) {
+    return { error: invalid(command, `Cannot read --data ${dataPath}: ${error.message}`) };
+  }
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch (error) {
+    return { error: invalid(command, `--data ${dataPath} is not JSON: ${error.message}`) };
+  }
+  if (data === null || typeof data !== "object" || Array.isArray(data)) {
+    return { error: invalid(command, `--data ${dataPath} must hold one JSON object`) };
+  }
+  return { data };
+}
+function hashRefs(command, root, record, field, refresh = false) {
+  if (!Array.isArray(record[field]))
+    return null;
+  for (const source of record[field]) {
+    if (!source || typeof source !== "object" || typeof source.path !== "string")
+      continue;
+    let current;
+    try {
+      current = sourceHash(root, { path: source.path, sceneId: source.scene, beatId: source.beat });
+    } catch (error) {
+      return failure(command, `Source ${source.path} cannot be read: ${error.message}`, "SOURCE_UNREADABLE", 1, [record.id]);
+    }
+    if (source.hash === undefined || refresh)
+      source.hash = current;
+    else if (source.hash !== current) {
+      return failure(command, `Source ${source.path} no longer matches the supplied hash`, "STALE_SOURCE", 3, [record.id]);
+    }
+  }
+  return null;
+}
+function takenNames(root, directory) {
+  const absolute = path16.join(root, directory);
+  return new Set(fs14.existsSync(absolute) ? fs14.readdirSync(absolute) : []);
+}
+function writeResult(command, root, writes, options, success) {
+  try {
+    const recorded = commit(root, writes, options.dryRun === true);
+    return {
+      envelope: envelope({ command, ok: true, data: { ...success.data, dryRun: options.dryRun === true }, diagnostics: success.diagnostics ?? [], writes: recorded }),
+      exitCode: 0,
+      text: options.dryRun === true ? "" : success.text,
+      ...success.log ? { log: success.log } : {}
+    };
+  } catch (error) {
+    return fromStorageError(command, error);
+  }
+}
+
+// src/memory/decisions.js
+var byId = (left, right) => left.id.localeCompare(right.id, "en");
+function list(value) {
+  return Array.isArray(value) ? value.filter((item) => typeof item === "string") : [];
+}
+function decisionEntries(project) {
+  return [...project.records.values()].filter((entry) => entry.type === "decision").sort(byId);
+}
+function projectId(project) {
+  return [...project.records.values()].find((entry) => entry.type === "project")?.id;
+}
+function successors(entries) {
+  const found = new Map;
+  for (const entry of entries) {
+    for (const prior of list(entry.record.supersedes)) {
+      if (!found.has(prior))
+        found.set(prior, []);
+      found.get(prior).push(entry.id);
+    }
+  }
+  return found;
+}
+function summarize(entry, supersededBy) {
+  const record = entry.record;
+  return {
+    id: entry.id,
+    status: record.status,
+    instruction: record.status === "accepted",
+    scopeIds: list(record["scope-ids"]),
+    rationale: record.rationale ?? null,
+    source: record.source ?? null,
+    supersedes: list(record.supersedes),
+    supersededBy: supersededBy.get(entry.id) ?? [],
+    path: entry.path.split("\\").join("/")
+  };
+}
+function summarizeDecisions(project) {
+  const entries = decisionEntries(project);
+  const supersededBy = successors(entries);
+  return entries.map((entry) => summarize(entry, supersededBy));
+}
+function decisionsFor(project, ids) {
+  const wanted = new Set(ids);
+  const root = projectId(project);
+  if (root !== undefined)
+    wanted.add(root);
+  const inScope = summarizeDecisions(project).filter((item) => item.scopeIds.some((id) => wanted.has(id)));
+  return {
+    instructions: inScope.filter((item) => item.status === "accepted"),
+    proposed: inScope.filter((item) => item.status === "proposed")
+  };
+}
+function cycles(entries) {
+  const edges = new Map(entries.map((entry) => [entry.id, list(entry.record.supersedes)]));
+  const index = new Map;
+  const low = new Map;
+  const stack = [];
+  const onStack = new Set;
+  const found = [];
+  let counter = 0;
+  const visit2 = (id) => {
+    index.set(id, counter);
+    low.set(id, counter);
+    counter += 1;
+    stack.push(id);
+    onStack.add(id);
+    for (const next of edges.get(id)) {
+      if (!edges.has(next))
+        continue;
+      if (!index.has(next)) {
+        visit2(next);
+        low.set(id, Math.min(low.get(id), low.get(next)));
+      } else if (onStack.has(next)) {
+        low.set(id, Math.min(low.get(id), index.get(next)));
+      }
+    }
+    if (low.get(id) !== index.get(id))
+      return;
+    const component = [];
+    let member;
+    do {
+      member = stack.pop();
+      onStack.delete(member);
+      component.push(member);
+    } while (member !== id);
+    if (component.length > 1 || edges.get(id).includes(id))
+      found.push(component.sort());
+  };
+  for (const entry of entries)
+    if (!index.has(entry.id))
+      visit2(entry.id);
+  return found.sort((left, right) => left[0].localeCompare(right[0], "en"));
+}
+function decisionFindings(project) {
+  const entries = decisionEntries(project);
+  const findings = cycles(entries).map((component) => finding({
+    code: "SUPERSESSION_CYCLE",
+    message: `Decisions supersede each other in a cycle: ${component.join(" -> ")}`,
+    recordIds: component,
+    action: "Edit supersedes so each decision replaces only earlier decisions."
+  }));
+  for (const entry of entries) {
+    for (const target of list(entry.record.supersedes)) {
+      const other = project.records.get(target);
+      if (other && other.type !== "decision") {
+        findings.push(finding({
+          code: "SUPERSEDES_NOT_DECISION",
+          message: `${entry.path}: supersedes ${target}, which is a ${other.type}, not a decision`,
+          recordIds: [entry.id, target],
+          action: "A decision can supersede only another decision."
+        }));
+      }
+    }
+  }
+  return findings;
+}
+var NEW_STATUSES = new Set(["proposed", "accepted", "rejected"]);
+var SUPERSEDABLE = new Set(["proposed", "accepted"]);
+var ACTIVE = new Set(["proposed", "accepted"]);
+function newRecord(project, data, defaults) {
+  const record = { format: FORMAT, "schema-version": SCHEMA_VERSION, id: data.id, type: "decision", ...defaults, ...data };
+  if (record.id === undefined)
+    record.id = allocateId("decision", new Set(project.records.keys()));
+  return record;
+}
+function recordProblem(command, project, record) {
+  if (record.type !== "decision")
+    return invalid(command, `${command} creates records of type decision`);
+  if (typeof record.id !== "string" || !ID_PATTERN.test(record.id))
+    return invalid(command, `Invalid id: ${record.id}`);
+  if (project.records.has(record.id)) {
+    return failure(command, `Record id ${record.id} is already used`, "DUPLICATE_RECORD_ID", 1, [record.id]);
+  }
+  return null;
+}
+function schemaProblem(command, record) {
+  const schema = validateRecord(record);
+  return schema.length > 0 ? findingsResult(command, schema, 2) : null;
+}
+function withEntries(project, entries) {
+  const records = new Map(project.records);
+  for (const entry of entries)
+    records.set(entry.id, entry);
+  return { root: project.root, records, unindexed: project.unindexed };
+}
+function newEntry(root, record) {
+  const relative3 = `decisions/${uniqueFilename(record.id, record.id, takenNames(root, "decisions"))}`;
+  return { id: record.id, type: "decision", path: relative3, record, body: "", valid: true };
+}
+function ownDangling(project, id) {
+  return danglingReferenceDiagnostics(project).filter((item) => item.recordIds[1] === id);
+}
+function addDecision(root, options = {}) {
+  const command = "decision add";
+  if (options.dataPath === undefined)
+    return invalid(command, "Usage: story decision add --data <json-file>");
+  const opened = openProject(root, command);
+  if (opened.error)
+    return opened.error;
+  const { project } = opened;
+  const blocked = loadErrorResult(command, project);
+  if (blocked)
+    return blocked;
+  const read = readData(command, options.cwd ?? process.cwd(), options.dataPath);
+  if (read.error)
+    return read.error;
+  const record = newRecord(project, read.data, {});
+  const problem = recordProblem(command, project, record);
+  if (problem)
+    return problem;
+  if (!NEW_STATUSES.has(record.status)) {
+    return invalid(command, "A new decision is proposed, accepted, or rejected; use decision supersede to replace one");
+  }
+  if (record.supersedes !== undefined) {
+    return invalid(command, "Use story decision supersede <id> to replace a decision; decision add does not write supersedes");
+  }
+  if (!Array.isArray(record["scope-ids"]) || record["scope-ids"].length === 0) {
+    return invalid(command, "A decision needs scope-ids: the project id, record ids, or scene ids it applies to");
+  }
+  const schema = schemaProblem(command, record);
+  if (schema)
+    return schema;
+  const entry = newEntry(root, record);
+  const dangling = ownDangling(withEntries(project, [entry]), record.id);
+  if (dangling.length > 0)
+    return findingsResult(command, dangling, 1);
+  const writes = [{ path: entry.path, action: "create", expectedHash: null, content: stringifyFrontmatter(record) }];
+  return writeResult(command, root, writes, options, {
+    data: summarize(entry, new Map),
+    text: `Added decision ${record.id}: ${entry.path}
+`
+  });
+}
+function describeDecision(item) {
+  const note = item.status === "proposed" ? ", not an instruction" : "";
+  let line = `- ${item.id} [${item.status}${note}] scope ${item.scopeIds.join(", ")}`;
+  if (item.rationale !== null)
+    line += `: ${item.rationale}`;
+  if (item.source !== null)
+    line += ` (source: ${item.source})`;
+  if (item.supersedes.length > 0)
+    line += ` (supersedes ${item.supersedes.join(", ")})`;
+  if (item.supersededBy.length > 0)
+    line += ` (superseded by ${item.supersededBy.join(", ")})`;
+  return line;
+}
+function listDecisions(root, options = {}) {
+  const command = "decision list";
+  const opened = openProject(root, command);
+  if (opened.error)
+    return opened.error;
+  const { project } = opened;
+  const record = options.record ?? null;
+  if (record !== null && !project.records.has(record)) {
+    return failure(command, `No record with id ${record}`, "RECORD_NOT_FOUND", 1, [record]);
+  }
+  const scope = new Set(record === null ? [] : [record, projectId(project)]);
+  const decisions = summarizeDecisions(project).filter((item) => options.includeInactive === true || ACTIVE.has(item.status)).filter((item) => record === null || item.scopeIds.some((id) => scope.has(id)));
+  const diagnostics = decisionFindings(project);
+  const ok = !diagnostics.some((item) => item.severity === "error");
+  const lines = [record === null ? "Decisions:" : `Decisions for ${record}:`];
+  if (decisions.length === 0)
+    lines.push("- None");
+  for (const item of decisions)
+    lines.push(describeDecision(item));
+  if (diagnostics.length > 0) {
+    lines.push("", "Diagnostics:");
+    for (const item of diagnostics)
+      lines.push(`- ${item.severity} ${item.code}: ${item.message}`);
+  }
+  return {
+    envelope: envelope({ command, ok, data: { record, decisions }, diagnostics }),
+    exitCode: ok ? 0 : 1,
+    text: `${lines.join(`
+`)}
+`
+  };
+}
+function supersedeDecision(root, id, options = {}) {
+  const command = "decision supersede";
+  if (!id || options.dataPath === undefined)
+    return invalid(command, "Usage: story decision supersede <id> --data <json-file>");
+  const opened = openProject(root, command);
+  if (opened.error)
+    return opened.error;
+  const { project } = opened;
+  const blocked = loadErrorResult(command, project);
+  if (blocked)
+    return blocked;
+  const prior = project.records.get(id);
+  if (!prior || prior.type !== "decision")
+    return failure(command, `No decision with id ${id}`, "DECISION_NOT_FOUND", 1, [id]);
+  const from = prior.record.status;
+  if (!SUPERSEDABLE.has(from)) {
+    return failure(command, `Decision ${id} is ${from}; only proposed or accepted decisions can be superseded`, "DECISION_TRANSITION_INVALID", 1, [id]);
+  }
+  const read = readData(command, options.cwd ?? process.cwd(), options.dataPath);
+  if (read.error)
+    return read.error;
+  const supplied = read.data.supersedes;
+  if (supplied !== undefined && !(Array.isArray(supplied) && supplied.length === 1 && supplied[0] === id)) {
+    return invalid(command, `A successor supersedes exactly ${id}; leave supersedes out of --data`);
+  }
+  const record = newRecord(project, read.data, { status: "accepted", "scope-ids": prior.record["scope-ids"] });
+  record.supersedes = [id];
+  const problem = recordProblem(command, project, record);
+  if (problem)
+    return problem;
+  if (record.status !== "accepted") {
+    return invalid(command, "A successor is accepted. Record an alternative that is only proposed with decision add");
+  }
+  const schema = schemaProblem(command, record);
+  if (schema)
+    return schema;
+  const entry = newEntry(root, record);
+  const priorRecord = { ...prior.record, status: "superseded" };
+  const after = withEntries(project, [entry, { ...prior, record: priorRecord }]);
+  const problems = [
+    ...ownDangling(after, record.id),
+    ...decisionFindings(after).filter((item) => item.code === "SUPERSESSION_CYCLE" && item.recordIds.includes(record.id))
+  ];
+  if (problems.length > 0)
+    return findingsResult(command, problems, 1);
+  const priorPath = prior.path.split(path17.sep).join("/");
+  const markdown = fs15.readFileSync(path17.join(root, prior.path), "utf8");
+  const writes = [
+    { path: entry.path, action: "create", expectedHash: null, content: stringifyFrontmatter(record) },
+    { path: priorPath, action: "replace", expectedHash: prior.hash, content: replaceFrontmatter(markdown, { ...parseFrontmatter(markdown, prior.path).data, status: "superseded" }) }
+  ];
+  return writeResult(command, root, writes, options, {
+    data: {
+      prior: { id, path: priorPath, from, to: "superseded" },
+      successor: summarize(entry, new Map)
+    },
+    text: `Superseded decision ${id} with ${record.id}
+`
+  });
+}
+
+// src/memory/issues.js
+import fs16 from "node:fs";
+import path18 from "node:path";
+var byId2 = (left, right) => left.id.localeCompare(right.id, "en");
+function list2(value) {
+  return Array.isArray(value) ? value.filter((item) => typeof item === "string") : [];
+}
+function evidenceList(record) {
+  return Array.isArray(record.evidence) ? record.evidence.filter((item) => item && typeof item === "object" && typeof item.path === "string") : [];
+}
+function issueEntries(project) {
+  return [...project.records.values()].filter((entry) => entry.type === "issue").sort(byId2);
+}
+function currentHash(root, ref) {
+  try {
+    return sourceHash(root, { path: ref.path, sceneId: ref.scene, beatId: ref.beat });
+  } catch {
+    return null;
+  }
+}
+function changedEvidence(root, record) {
+  const changed = [];
+  for (const ref of evidenceList(record)) {
+    const current = currentHash(root, ref);
+    if (current === ref.hash)
+      continue;
+    const item = { path: ref.path };
+    if (ref.scene !== undefined)
+      item.scene = ref.scene;
+    if (ref.beat !== undefined)
+      item.beat = ref.beat;
+    item.recorded = ref.hash;
+    item.current = current;
+    changed.push(item);
+  }
+  return changed;
+}
+function unboundReason(record) {
+  const dismissal = record.dismissal;
+  if (!dismissal || typeof dismissal !== "object")
+    return "has no dismissal record";
+  if (typeof dismissal.code !== "string" || dismissal.code === "")
+    return "does not name an exact diagnostic code";
+  const affected = list2(record["affected-ids"]);
+  if (affected.length === 0)
+    return "has no affected ids";
+  if (evidenceList(record).length === 0)
+    return "has no evidence fingerprints";
+  const recordId = dismissal["record-id"];
+  if (recordId !== undefined && !affected.includes(recordId))
+    return `names record ${recordId}, which is not an affected id`;
+  return null;
+}
+function refreshIssueEvidence(project) {
+  return issueEntries(project).map((entry) => {
+    const record = entry.record;
+    const changed = changedEvidence(project.root, record);
+    const reopen = record.status === "dismissed" && changed.length > 0;
+    return {
+      id: entry.id,
+      status: reopen ? "open" : record.status,
+      storedStatus: record.status,
+      category: record.category,
+      severity: record.severity,
+      affectedIds: list2(record["affected-ids"]),
+      evidence: evidenceList(record),
+      dismissal: record.dismissal ?? null,
+      changedEvidence: changed,
+      reopened: reopen ? { from: "dismissed", dismissal: record.dismissal ?? null } : null,
+      bound: record.status !== "dismissed" || unboundReason(record) === null,
+      path: entry.path.split("\\").join("/")
+    };
+  });
+}
+function describeDismissal(dismissal) {
+  if (!dismissal)
+    return "was dismissed";
+  const code = typeof dismissal.code === "string" && dismissal.code !== "" ? ` (${dismissal.code})` : "";
+  return `was dismissed${code}: ${dismissal.reason}`;
+}
+function issueFindings(project, issues = refreshIssueEvidence(project)) {
+  const findings = [];
+  const entries = new Map(issueEntries(project).map((entry) => [entry.id, entry]));
+  for (const issue2 of issues) {
+    if (issue2.reopened) {
+      const paths = issue2.changedEvidence.map((item) => item.path).join(", ");
+      findings.push(finding({
+        code: "ISSUE_REOPENED",
+        severity: "warning",
+        message: `${issue2.path}: evidence changed in ${paths}, so ${issue2.id} is open for review. It ${describeDismissal(issue2.reopened.dismissal)}`,
+        recordIds: [issue2.id, ...issue2.affectedIds],
+        sources: issue2.evidence,
+        evidence: "source",
+        action: "Inspect the changed evidence, then resolve the issue or dismiss it again against the current text."
+      }));
+      continue;
+    }
+    if (issue2.storedStatus !== "dismissed")
+      continue;
+    const reason = unboundReason(entries.get(issue2.id).record);
+    if (reason === null)
+      continue;
+    findings.push(finding({
+      code: "ISSUE_DISMISSAL_UNBOUND",
+      message: `${issue2.path}: dismissed issue ${issue2.id} ${reason}, so it cannot dismiss any finding`,
+      recordIds: [issue2.id],
+      action: "Give the dismissal an exact diagnostic code, list the affected ids, and record the evidence it was judged against."
+    }));
+  }
+  return findings;
+}
+var HISTORY_HEADING = /^## History[ \t]*$/m;
+var DISMISSAL_KEYS = new Set(["code", "record-id", "reason"]);
+function appendHistory(body, lines) {
+  const base = body.replace(/\s*$/, "");
+  const entries = lines.map((line) => `- ${line}
+`).join("");
+  if (HISTORY_HEADING.test(base))
+    return `${base}
+${entries}`;
+  return `${base === "" ? `
+` : `${base}
+
+`}## History
+
+${entries}`;
+}
+function summarizeIssue(issue2) {
+  const { bound, ...rest } = issue2;
+  return rest;
+}
+function describeIssue(issue2) {
+  const affects = issue2.affectedIds.length === 0 ? "" : ` affects ${issue2.affectedIds.join(", ")}`;
+  let line = `- ${issue2.id} [${issue2.status} ${issue2.severity} ${issue2.category}]${affects}`;
+  if (issue2.reopened)
+    line += ` (reopened; ${describeDismissal(issue2.reopened.dismissal)})`;
+  else if (issue2.status === "dismissed" && issue2.dismissal)
+    line += ` (${describeDismissal(issue2.dismissal)})`;
+  return line;
+}
+function addIssue(root, options = {}) {
+  const command = "issue add";
+  if (options.dataPath === undefined)
+    return invalid(command, "Usage: story issue add --data <json-file>");
+  const opened = openProject(root, command);
+  if (opened.error)
+    return opened.error;
+  const { project } = opened;
+  const blocked = loadErrorResult(command, project);
+  if (blocked)
+    return blocked;
+  const read = readData(command, options.cwd ?? process.cwd(), options.dataPath);
+  if (read.error)
+    return read.error;
+  const record = { format: FORMAT, "schema-version": SCHEMA_VERSION, id: read.data.id, type: "issue", status: "open", ...read.data };
+  if (record.type !== "issue")
+    return invalid(command, "issue add creates records of type issue");
+  if (record.id === undefined)
+    record.id = allocateId("issue", new Set(project.records.keys()));
+  if (typeof record.id !== "string" || !ID_PATTERN.test(record.id))
+    return invalid(command, `Invalid id: ${record.id}`);
+  if (project.records.has(record.id)) {
+    return failure(command, `Record id ${record.id} is already used`, "DUPLICATE_RECORD_ID", 1, [record.id]);
+  }
+  if (record.status !== "open")
+    return invalid(command, "A new issue is open; use issue resolve or issue dismiss to close it");
+  if (record.dismissal !== undefined)
+    return invalid(command, "Use story issue dismiss <id> to dismiss an issue");
+  const unreadable = hashRefs(command, root, record, "evidence");
+  if (unreadable)
+    return unreadable;
+  const schema = validateRecord(record);
+  if (schema.length > 0)
+    return findingsResult(command, schema, 2);
+  const relative3 = `issues/${uniqueFilename(record.id, record.id, takenNames(root, "issues"))}`;
+  const entry = { id: record.id, type: "issue", path: relative3, record, body: "", valid: true };
+  const withIssue = { records: new Map([...project.records, [record.id, entry]]), unindexed: project.unindexed };
+  const dangling = danglingReferenceDiagnostics(withIssue).filter((item) => item.recordIds[1] === record.id);
+  if (dangling.length > 0)
+    return findingsResult(command, dangling, 1);
+  const content = `${stringifyFrontmatter(record)}## History
+
+- opened
+`;
+  const [summary] = refreshIssueEvidence({ root, records: new Map([[record.id, entry]]) });
+  return writeResult(command, root, [{ path: relative3, action: "create", expectedHash: null, content }], options, {
+    data: summarizeIssue(summary),
+    text: `Added issue ${record.id}: ${relative3}
+`
+  });
+}
+function listIssues(root, options = {}) {
+  const command = "issue list";
+  const opened = openProject(root, command);
+  if (opened.error)
+    return opened.error;
+  const { project } = opened;
+  const record = options.record ?? null;
+  if (record !== null && !project.records.has(record)) {
+    return failure(command, `No record with id ${record}`, "RECORD_NOT_FOUND", 1, [record]);
+  }
+  const all = refreshIssueEvidence(project);
+  const diagnostics = issueFindings(project, all);
+  const issues = all.filter((item) => options.includeInactive === true || item.status === "open").filter((item) => record === null || item.affectedIds.includes(record)).map(summarizeIssue);
+  const ok = !diagnostics.some((item) => item.severity === "error");
+  const lines = [record === null ? "Issues:" : `Issues affecting ${record}:`];
+  if (issues.length === 0)
+    lines.push("- None");
+  for (const item of issues)
+    lines.push(describeIssue(item));
+  if (diagnostics.length > 0) {
+    lines.push("", "Diagnostics:");
+    for (const item of diagnostics)
+      lines.push(`- ${item.severity} ${item.code}: ${item.message}`);
+  }
+  return {
+    envelope: envelope({ command, ok, data: { record, issues }, diagnostics }),
+    exitCode: ok ? 0 : 1,
+    text: `${lines.join(`
+`)}
+`
+  };
+}
+function openIssue(command, root, id) {
+  const opened = openProject(root, command);
+  if (opened.error)
+    return { error: opened.error };
+  const { project } = opened;
+  const blocked = loadErrorResult(command, project);
+  if (blocked)
+    return { error: blocked };
+  const entry = project.records.get(id);
+  if (!entry || entry.type !== "issue") {
+    return { error: failure(command, `No issue with id ${id}`, "ISSUE_NOT_FOUND", 1, [id]) };
+  }
+  const [issue2] = refreshIssueEvidence({ root: project.root, records: new Map([[id, entry]]) });
+  if (issue2.status !== "open") {
+    return { error: failure(command, `Issue ${id} is ${issue2.status}; only an open issue can be resolved or dismissed`, "ISSUE_TRANSITION_INVALID", 1, [id]) };
+  }
+  return { project, entry, issue: issue2 };
+}
+function reopenedLine(issue2) {
+  const paths = issue2.changedEvidence.map((item) => item.path).join(", ");
+  return `reopened: evidence changed in ${paths}; it ${describeDismissal(issue2.reopened.dismissal)}`;
+}
+function transition(command, root, target, data, history, options, verb) {
+  const { entry, issue: issue2 } = target;
+  const markdown = fs16.readFileSync(path18.join(root, entry.path), "utf8");
+  const parsed = parseFrontmatter(markdown, entry.path);
+  const lines = issue2.reopened ? [reopenedLine(issue2), history] : [history];
+  const content = replaceFrontmatter(markdown, { ...parsed.data, ...data }, appendHistory(parsed.body, lines));
+  const relative3 = entry.path.split(path18.sep).join("/");
+  return writeResult(command, root, [{ path: relative3, action: "replace", expectedHash: entry.hash, content }], options, {
+    data: { id: entry.id, path: relative3, from: "open", to: data.status, reopened: issue2.reopened },
+    text: `${verb} issue ${entry.id}: ${relative3}
+`
+  });
+}
+function optionalData(command, options) {
+  if (options.dataPath === undefined)
+    return { data: {} };
+  return readData(command, options.cwd ?? process.cwd(), options.dataPath);
+}
+function resolveIssue(root, id, options = {}) {
+  const command = "issue resolve";
+  if (!id)
+    return invalid(command, "Usage: story issue resolve <id> [--data <json-file>]");
+  const target = openIssue(command, root, id);
+  if (target.error)
+    return target.error;
+  const read = optionalData(command, options);
+  if (read.error)
+    return read.error;
+  const extra = Object.keys(read.data).filter((key) => key !== "reason");
+  if (extra.length > 0)
+    return invalid(command, `issue resolve --data accepts only reason, not ${extra.join(", ")}`);
+  const reason = read.data.reason;
+  if (reason !== undefined && (typeof reason !== "string" || reason === "")) {
+    return invalid(command, "reason must be non-empty text");
+  }
+  const history = reason === undefined ? "resolved" : `resolved: ${reason}`;
+  return transition(command, root, target, { status: "resolved", dismissal: undefined }, history, options, "Resolved");
+}
+function dismissIssue(root, id, options = {}) {
+  const command = "issue dismiss";
+  if (!id || options.dataPath === undefined)
+    return invalid(command, "Usage: story issue dismiss <id> --data <json-file>");
+  const target = openIssue(command, root, id);
+  if (target.error)
+    return target.error;
+  const read = readData(command, options.cwd ?? process.cwd(), options.dataPath);
+  if (read.error)
+    return read.error;
+  const dismissal = read.data;
+  const extra = Object.keys(dismissal).filter((key) => !DISMISSAL_KEYS.has(key));
+  if (extra.length > 0)
+    return invalid(command, `issue dismiss --data accepts code, record-id and reason, not ${extra.join(", ")}`);
+  if (typeof dismissal.code !== "string" || dismissal.code === "")
+    return invalid(command, "A dismissal names one exact diagnostic code");
+  if (typeof dismissal.reason !== "string" || dismissal.reason === "")
+    return invalid(command, "A dismissal needs a reason");
+  if (dismissal["record-id"] !== undefined && typeof dismissal["record-id"] !== "string")
+    return invalid(command, "record-id must be a record id");
+  const record = { ...target.entry.record, status: "dismissed", dismissal };
+  const unbound = unboundReason(record);
+  if (unbound !== null) {
+    return failure(command, `Issue ${id} ${unbound}, so a dismissal could not be matched exactly`, "ISSUE_DISMISSAL_UNBOUND", 1, [id]);
+  }
+  const evidence = record.evidence.map((ref) => ({ ...ref }));
+  const fingerprinted = { id, evidence };
+  const unreadable = hashRefs(command, root, fingerprinted, "evidence", true);
+  if (unreadable)
+    return unreadable;
+  const on = dismissal["record-id"] === undefined ? "" : ` on ${dismissal["record-id"]}`;
+  const history = `dismissed (${dismissal.code}${on}): ${dismissal.reason}`;
+  return transition(command, root, target, { status: "dismissed", dismissal, evidence }, history, options, "Dismissed");
+}
+
 // src/state/predicates.js
 var EXCLUSIVE = { cardinality: "exclusive", ends: "replacement-or-valid-until" };
 var ADDITIVE = { cardinality: "additive", ends: "valid-until" };
@@ -24303,16 +24693,844 @@ function resolveState(project, cursor, options = {}) {
     }
   }
   diagnostics.push(...chronology.diagnostics.slice(before));
-  const byId2 = (left, right) => left.id.localeCompare(right.id, "en");
+  const byId3 = (left, right) => left.id.localeCompare(right.id, "en");
   return {
-    facts: facts.sort(byId2),
+    facts: facts.sort(byId3),
     conflicts: conflicts.sort((left, right) => left.subject.localeCompare(right.subject, "en") || left.predicate.localeCompare(right.predicate, "en")),
-    unresolved: unresolved.sort(byId2),
+    unresolved: unresolved.sort(byId3),
     diagnostics
   };
 }
 
+// src/state/knowledge.js
+var PROFILE_TYPES = new Set(["character", "location", "system", "faction", "object"]);
+var EPISTEMIC_KINDS = new Set(["knowledge", "belief"]);
+var CURSOR_CODES = new Set(["INVALID_CURSOR", "MISSING_SCENE", "MISSING_BEAT"]);
+var HISTORY_HEADING2 = /^#{1,6}\s+(?:history|backstory|biography|timeline|later life|fate|future)\b/i;
+var DATED_ENTRY = /^\s*(?:[-*+]\s+)?(?:\d{1,4}|year\s+\d+|age\s+\d+|chapter\s+\d+|book\s+\d+)\s*(?:[:\u2013\u2014]|-\s)/i;
+var LATER_PHRASE = /\b(?:years later|later in life|eventually|by the end of the (?:story|book|series)|will (?:die|become|betray|learn|lose|marry|kill|leave|discover))\b/i;
+function temporalLine(body) {
+  const lines = body.split(/\r?\n/);
+  for (let index = 0;index < lines.length; index += 1) {
+    const line = lines[index];
+    if (HISTORY_HEADING2.test(line) || DATED_ENTRY.test(line) || LATER_PHRASE.test(line)) {
+      return { number: index + 1, text: line.trim() };
+    }
+  }
+  return null;
+}
+function biographyFindings(project, ids) {
+  const wanted = ids === undefined ? null : new Set(ids);
+  const findings = [];
+  const entries = [...project.records.values()].filter((entry) => PROFILE_TYPES.has(entry.type) && (wanted === null || wanted.has(entry.id))).sort((left, right) => left.id.localeCompare(right.id, "en"));
+  for (const entry of entries) {
+    const line = temporalLine(entry.body ?? "");
+    if (!line)
+      continue;
+    findings.push({
+      code: "UNSPLIT_BIOGRAPHY",
+      severity: "warning",
+      message: `${entry.path}: profile body line ${line.number} looks like temporal history that is not split into facts: "${line.text}"`,
+      recordIds: [entry.id],
+      sources: [],
+      evidence: "candidate",
+      action: "Move dated or later events into facts with valid-from cursors, keeping the profile to stable traits."
+    });
+  }
+  return findings;
+}
+function statementFor(project, value) {
+  if (!isIdReference(value))
+    return null;
+  const target = project.records.get(value);
+  if (!target || target.type !== "fact")
+    return null;
+  const fact = target.record;
+  return { id: target.id, status: fact.status, kind: fact.kind, subject: fact.subject, predicate: fact.predicate, value: fact.value };
+}
+function knowledgeAt(project, characterId, cursor, options = {}) {
+  const entry = project.records.get(characterId);
+  if (!entry || entry.type !== "character") {
+    return {
+      character: null,
+      knows: [],
+      believes: [],
+      unresolved: [],
+      diagnostics: [{
+        code: "CHARACTER_NOT_FOUND",
+        severity: "error",
+        message: `No character with id ${characterId}`,
+        recordIds: [characterId],
+        sources: [],
+        evidence: "structural",
+        action: "Check the id with story entity show, or add the character first."
+      }]
+    };
+  }
+  const state = resolveState(project, cursor, options);
+  const mine = (item) => item.subject === characterId && EPISTEMIC_KINDS.has(item.kind);
+  const withStatement = (item) => ({ ...item, statement: statementFor(project, item.value) });
+  const facts = state.facts.filter(mine).map(withStatement);
+  const unresolved = state.unresolved.filter(mine);
+  const relevant = new Set([...facts, ...unresolved].map((item) => item.id));
+  const diagnostics = state.diagnostics.filter((item) => CURSOR_CODES.has(item.code) || item.recordIds.some((id) => relevant.has(id)));
+  diagnostics.push(...biographyFindings(project, [characterId]));
+  return {
+    character: { id: entry.id, name: entry.record.name ?? entry.record.title ?? "" },
+    knows: facts.filter((item) => item.kind === "knowledge"),
+    believes: facts.filter((item) => item.kind === "belief"),
+    unresolved,
+    diagnostics
+  };
+}
+
+// src/context/select.js
+var PROJECT_FIELDS = [
+  "title",
+  "premise",
+  "counter-premise",
+  "pov",
+  "tense",
+  "genre",
+  "sub-genre",
+  "setting-era",
+  "series",
+  "book-number",
+  "instructions",
+  "style-sources"
+];
+var PLAN_TYPES = new Set(["arc", "question", "promise", "clue"]);
+var WORLD_TYPES = new Set(["location", "system", "faction", "object", "term"]);
+var ENTITY_TYPES3 = new Set(["character", ...WORLD_TYPES]);
+var STYLE_TASKS = new Set(["draft", "revise", "review", "image"]);
+var IMPACT_TASKS = new Set(["revise", "review"]);
+var NOT_WRITER_KNOWLEDGE = "for revision impact only; not writer knowledge at the cursor";
+var byId3 = (left, right) => left.id.localeCompare(right.id, "en");
+var slash3 = (value) => value.split("\\").join("/");
+function kindFor(type) {
+  if (ENTITY_TYPES3.has(type))
+    return "entity";
+  if (PLAN_TYPES.has(type))
+    return "plan";
+  return type;
+}
+function recordSource(entry) {
+  return { path: slash3(entry.path), hash: entry.hash, kind: "record" };
+}
+function declaredSources(record) {
+  const refs = [];
+  for (const field of ["sources", "evidence"]) {
+    if (!Array.isArray(record[field]))
+      continue;
+    for (const source of record[field]) {
+      if (!source || typeof source !== "object" || typeof source.path !== "string")
+        continue;
+      const ref = { path: source.path };
+      if (source.scene !== undefined)
+        ref.scene = source.scene;
+      if (source.beat !== undefined)
+        ref.beat = source.beat;
+      ref.hash = source.hash;
+      ref.kind = source.kind;
+      refs.push(ref);
+    }
+  }
+  return refs;
+}
+function recordContent(entry) {
+  const { format: _format, "schema-version": _version, ...record } = entry.record;
+  const body = entry.body ?? "";
+  return body.trim() === "" ? { record } : { record, body };
+}
+function linkedIds(entry) {
+  return new Set(referencesInRecord(entry.record).map((ref) => ref.id));
+}
+function linksTo(entry, wanted) {
+  if (wanted.has(entry.id))
+    return true;
+  for (const id of linkedIds(entry))
+    if (wanted.has(id))
+      return true;
+  return false;
+}
+function namesIn(entry, wanted) {
+  return [...linkedIds(entry)].filter((id) => wanted.has(id)).sort();
+}
+function notFound(message, recordIds, action2) {
+  return { code: "TARGET_NOT_FOUND", severity: "error", message, recordIds, sources: [], evidence: "structural", action: action2 };
+}
+function readingKeyOf(order, sceneId, beatId, side) {
+  const scene = order.get(sceneId);
+  if (!scene)
+    return null;
+  if (beatId === undefined)
+    return [scene.position, side === "before" ? 0 : 2 * scene.beats.length + 1];
+  const index = scene.beats.indexOf(beatId);
+  if (index < 0)
+    return null;
+  return [scene.position, side === "before" ? 2 * index + 1 : 2 * index + 2];
+}
+function compareKeys(left, right) {
+  return left[0] - right[0] || left[1] - right[1];
+}
+
+class Selection {
+  constructor(project, request, chronology) {
+    this.project = project;
+    this.request = request;
+    this.chronology = chronology;
+    this.order = new Map(chronology.readingOrder.map((scene) => [scene.sceneId, scene]));
+    this.candidates = [];
+    this.seen = new Set;
+    this.diagnostics = [];
+    this.fatal = false;
+  }
+  add(item, { priority, required = false, retrieval = item.id, section = "items" }) {
+    if (this.seen.has(item.id))
+      return;
+    this.seen.add(item.id);
+    this.candidates.push({ item: { ...item, required }, priority, required, retrieval, section });
+  }
+  addRecord(entry, reason, options, kind = kindFor(entry.type)) {
+    this.add({
+      id: entry.id,
+      kind,
+      reason,
+      required: false,
+      sources: [recordSource(entry), ...declaredSources(entry.record)],
+      content: recordContent(entry)
+    }, options);
+  }
+  fail(diagnostic3) {
+    this.diagnostics.push(diagnostic3);
+    this.fatal = true;
+  }
+  entries(predicate) {
+    return [...this.project.records.values()].filter(predicate).sort(byId3);
+  }
+  prose(sceneId, { beatId, until } = {}) {
+    const scene = this.order.get(sceneId);
+    const root = this.project.root;
+    const whole = readSourceSpan(root, { path: scene.path, sceneId });
+    const source = { path: slash3(scene.path), scene: sceneId };
+    let bytes = whole.bytes;
+    if (beatId !== undefined) {
+      bytes = readSourceSpan(root, { path: scene.path, sceneId, beatId }).bytes;
+      source.beat = beatId;
+    } else if (until !== undefined) {
+      let cut = until.side === "before" ? whole.start : whole.end;
+      if (until.beatId !== undefined) {
+        const beat = readSourceSpan(root, { path: scene.path, sceneId, beatId: until.beatId });
+        cut = until.side === "before" ? beat.start : beat.end;
+      }
+      if (cut === whole.start)
+        return null;
+      if (cut !== whole.end) {
+        bytes = whole.bytes.subarray(0, cut - whole.start);
+        source.until = { beat: until.beatId, side: until.side };
+      }
+    }
+    source.hash = sha256Hex(bytes);
+    source.kind = "manuscript";
+    return { content: bytes.toString("utf8"), sources: [source] };
+  }
+  addProse(sceneId, reason, options, spanOptions = {}, id = `prose:${sceneId}`, kind = "prose") {
+    const span = this.prose(sceneId, spanOptions);
+    if (span === null)
+      return;
+    this.add({ id, kind, reason, required: false, sources: span.sources, content: span.content }, { retrieval: sceneId, ...options });
+  }
+  constraints() {
+    this.request.constraints.forEach((text, index) => {
+      this.add({
+        id: `constraint:${index + 1}`,
+        kind: "constraint",
+        reason: "explicit caller constraint",
+        required: false,
+        sources: [{ path: "request", index: index + 1, hash: sha256Hex(Buffer.from(text, "utf8")), kind: "request" }],
+        content: text
+      }, { priority: 0, required: true });
+    });
+  }
+  projectContract() {
+    const entry = this.entries((item) => item.type === "project")[0];
+    if (!entry)
+      return null;
+    const content = {};
+    for (const field of PROJECT_FIELDS)
+      if (entry.record[field] !== undefined)
+        content[field] = entry.record[field];
+    if ((entry.body ?? "").trim() !== "")
+      content.body = entry.body;
+    this.add({
+      id: `project:${entry.id}`,
+      kind: "project",
+      reason: "project contract and applicable project instructions",
+      required: false,
+      sources: [recordSource(entry)],
+      content
+    }, { priority: 0, required: true, retrieval: entry.id });
+    return entry;
+  }
+  sceneRecord(sceneId, reason, options) {
+    const entry = this.project.records.get(sceneId);
+    this.add({
+      id: `scene:${sceneId}`,
+      kind: "scene",
+      reason,
+      required: false,
+      sources: [recordSource(entry), ...declaredSources(entry.record)],
+      content: recordContent(entry)
+    }, { retrieval: sceneId, ...options });
+  }
+  includes() {
+    for (const id of this.request.include) {
+      const entry = this.project.records.get(id);
+      if (!entry) {
+        this.fail(notFound(`Included record ${id} does not exist`, [id], "Include ids of records that exist in this project."));
+        continue;
+      }
+      const options = { priority: 1, required: true };
+      if (entry.type === "scene") {
+        this.sceneRecord(id, "requested by the caller", options);
+        if (this.order.has(id))
+          this.addProse(id, "requested by the caller", options);
+      } else {
+        this.addRecord(entry, "requested by the caller", options);
+      }
+    }
+  }
+  target() {
+    const target = this.request.target;
+    if (target === null)
+      return null;
+    const entry = this.project.records.get(target.sceneId);
+    if (!entry || entry.type !== "scene") {
+      this.fail(notFound(`Target scene ${target.sceneId} does not exist`, [target.sceneId], "Target a scene id from this project."));
+      return null;
+    }
+    const scene = this.order.get(target.sceneId);
+    if (!scene) {
+      this.fail(notFound(`Target scene ${target.sceneId} has no span in chapter source, so there is no prose to select`, [target.sceneId], `Add <!-- story-scene: ${target.sceneId} --> to its chapter.`));
+      return null;
+    }
+    if (target.beatId !== undefined && !scene.beats.includes(target.beatId)) {
+      this.fail(notFound(`Beat ${target.beatId} is not in scene ${target.sceneId}`, [target.beatId, target.sceneId], "Target a beat declared inside the scene's span, or omit the beat."));
+      return null;
+    }
+    return entry;
+  }
+  styles(projectEntry) {
+    const paths = projectEntry?.record["style-sources"] ?? [];
+    for (const relative3 of paths) {
+      let bytes;
+      try {
+        bytes = fs17.readFileSync(resolveWithinRoot(this.project.root, relative3));
+      } catch (error) {
+        this.diagnostics.push({
+          code: "STYLE_SOURCE_UNREADABLE",
+          severity: "warning",
+          message: `story.md style source ${relative3} could not be read: ${error.message}`,
+          recordIds: [projectEntry.id],
+          sources: [recordSource(projectEntry)],
+          evidence: "structural",
+          action: "Fix the style-sources path or add the file."
+        });
+        continue;
+      }
+      this.add({
+        id: `style:${relative3}`,
+        kind: "style",
+        reason: "style source named by the project contract",
+        required: false,
+        sources: [{ path: relative3, hash: sha256Hex(bytes), kind: "style" }],
+        content: bytes.toString("utf8")
+      }, { priority: 5, retrieval: relative3 });
+    }
+  }
+  factItem(entry, reason, priority) {
+    this.addRecord(entry, reason, { priority }, "fact");
+  }
+  state(cursor, relevant, priorities) {
+    const state = resolveState(this.project, cursor, { chronology: this.chronology });
+    for (const fact of state.facts) {
+      const entry = this.project.records.get(fact.id);
+      const names = namesIn(entry, relevant);
+      if (names.length > 0)
+        this.factItem(entry, `established and applicable at the cursor; names ${names.join(", ")}`, priorities.relevant);
+      else if (priorities.other !== undefined)
+        this.factItem(entry, "established and applicable at the cursor", priorities.other);
+    }
+    for (const item of state.unresolved) {
+      const entry = this.project.records.get(item.id);
+      if (!linksTo(entry, relevant))
+        continue;
+      this.addRecord(entry, `unresolved at the cursor (${item.reason}: ${item.detail}); not established state`, { priority: priorities.unresolved }, "unresolved-fact");
+    }
+    this.stateDiagnostics = state.diagnostics;
+    return state;
+  }
+  decisions(ids, priorities) {
+    const { instructions, proposed } = decisionsFor(this.project, ids);
+    for (const item of instructions) {
+      this.addRecord(this.project.records.get(item.id), `accepted decision scoped to ${item.scopeIds.join(", ")}; an instruction`, { priority: priorities.accepted });
+    }
+    for (const item of proposed) {
+      this.addRecord(this.project.records.get(item.id), `proposed decision scoped to ${item.scopeIds.join(", ")}; history, not an instruction`, { priority: priorities.proposed });
+    }
+  }
+  allDecisions(priorities) {
+    for (const item of summarizeDecisions(this.project)) {
+      const entry = this.project.records.get(item.id);
+      if (item.status === "accepted" && item.supersededBy.length === 0) {
+        this.addRecord(entry, "accepted decision; an instruction", { priority: priorities.accepted });
+      } else if (item.status === "proposed") {
+        this.addRecord(entry, "proposed decision; history, not an instruction", { priority: priorities.proposed });
+      }
+    }
+  }
+  issues(relevant, priority) {
+    for (const issue3 of refreshIssueEvidence(this.project)) {
+      if (issue3.status !== "open")
+        continue;
+      const entry = this.project.records.get(issue3.id);
+      const names = relevant === null ? [] : namesIn(entry, relevant);
+      if (relevant !== null && names.length === 0)
+        continue;
+      const reopened = issue3.reopened ? "; reopened because its evidence changed" : "";
+      const about = names.length > 0 ? ` affecting ${names.join(", ")}` : "";
+      this.addRecord(entry, `open issue${about}${reopened}`, { priority });
+    }
+  }
+  plans(relevant, priority) {
+    for (const entry of this.entries((item) => PLAN_TYPES.has(item.type))) {
+      if (relevant === null) {
+        this.addRecord(entry, `${entry.type} in the project plan`, { priority });
+        continue;
+      }
+      const names = namesIn(entry, relevant);
+      if (relevant.has(entry.id) || names.length > 0) {
+        this.addRecord(entry, `linked ${entry.type}${names.length > 0 ? `; names ${names.join(", ")}` : ""}`, { priority });
+      }
+    }
+  }
+  research(relevant, priority) {
+    for (const entry of this.entries((item) => item.type === "research")) {
+      if (relevant === null) {
+        this.addRecord(entry, "research record", { priority });
+        continue;
+      }
+      const names = namesIn(entry, relevant);
+      if (names.length > 0)
+        this.addRecord(entry, `research used by ${names.join(", ")}`, { priority });
+    }
+  }
+  outline(priority) {
+    if (this.chronology.readingOrder.length === 0)
+      return;
+    const content = this.chronology.readingOrder.map((scene) => {
+      const record = this.project.records.get(scene.sceneId).record;
+      const line = { sceneId: scene.sceneId, chapterId: scene.chapterId };
+      if (record.title !== undefined)
+        line.title = record.title;
+      return line;
+    });
+    const ids = [...new Set(this.chronology.readingOrder.flatMap((scene) => [scene.chapterId, scene.sceneId]))];
+    this.add({
+      id: "outline",
+      kind: "outline",
+      reason: "reading-order outline of placed scenes",
+      required: false,
+      sources: ids.map((id) => recordSource(this.project.records.get(id))),
+      content
+    }, { priority, retrieval: "outline" });
+  }
+  profiles(ids, reason, priority) {
+    const included = [];
+    for (const id of ids) {
+      const entry = this.project.records.get(id);
+      if (!entry || !ENTITY_TYPES3.has(entry.type))
+        continue;
+      this.addRecord(entry, reason, { priority });
+      included.push(id);
+    }
+    return included;
+  }
+  finish(profileIds = []) {
+    const selected = new Set(this.candidates.map((candidate) => candidate.item.id));
+    const relevantState = (this.stateDiagnostics ?? []).filter((item) => item.recordIds.some((id) => selected.has(id)));
+    const included = [...new Set([...profileIds, ...this.candidates.filter((candidate) => candidate.item.kind === "entity").map((candidate) => candidate.item.id)])];
+    return {
+      candidates: this.candidates,
+      diagnostics: [...this.diagnostics, ...relevantState, ...biographyFindings(this.project, included)],
+      fatal: this.fatal
+    };
+  }
+}
+function sceneTask(selection, sceneEntry) {
+  const { request, order } = selection;
+  const target = request.target;
+  const scene = order.get(target.sceneId);
+  const cast = Array.isArray(sceneEntry.record.cast) ? sceneEntry.record.cast : [];
+  const relevant = new Set([target.sceneId, ...cast, ...request.include]);
+  selection.sceneRecord(target.sceneId, "the target scene record (scene entry)", { priority: 1, required: true });
+  if (request.task === "draft") {
+    selection.addProse(target.sceneId, "target scene prose up to the cursor; nothing after it", { priority: 1, required: true }, { until: { beatId: target.beatId, side: target.side } });
+  } else {
+    const what = target.beatId === undefined ? "the target scene" : `beat ${target.beatId}`;
+    selection.addProse(target.sceneId, `target prose: ${what}`, { priority: 1, required: true }, { beatId: target.beatId });
+  }
+  const previous = selection.chronology.readingOrder[scene.position - 1];
+  if (previous)
+    selection.addProse(previous.sceneId, "the scene before the target in reading order", { priority: 2 });
+  selection.profiles(cast, "in the scene cast; stable profile", 3);
+  selection.state(target, relevant, { relevant: 3, unresolved: 4, other: 6 });
+  selection.decisions([...relevant], { accepted: 4, proposed: 6 });
+  selection.plans(relevant, 4);
+  selection.issues(relevant, 4);
+  selection.research(relevant, 5);
+  if (IMPACT_TASKS.has(request.task))
+    impact(selection, target, scene);
+}
+function impact(selection, target, scene) {
+  const options = { priority: 8, section: "impact" };
+  for (const later of selection.chronology.readingOrder.slice(scene.position + 1)) {
+    selection.addProse(later.sceneId, `later passage in reading order, ${NOT_WRITER_KNOWLEDGE}`, options, {}, `impact:prose:${later.sceneId}`, "impact-prose");
+  }
+  for (const entry of factEntries(selection.project)) {
+    const record = entry.record;
+    if (record.status !== "established" || record["valid-from"] === undefined || record["valid-from"] === "baseline")
+      continue;
+    const from = { sceneId: record["valid-from"].scene, beatId: record["valid-from"].beat, side: record["valid-from"].side };
+    if (from.beatId === undefined)
+      delete from.beatId;
+    if (selection.chronology.compare(from, target) !== "after")
+      continue;
+    selection.add({
+      id: `impact:${entry.id}`,
+      kind: "impact-fact",
+      reason: `fact that starts after the cursor in story order, ${NOT_WRITER_KNOWLEDGE}`,
+      required: false,
+      sources: [recordSource(entry), ...declaredSources(record)],
+      content: recordContent(entry)
+    }, { ...options, retrieval: entry.id });
+  }
+}
+function projectTask(selection, sceneEntry) {
+  const { request, project } = selection;
+  const target = request.target;
+  const relevant = new Set(request.include);
+  if (sceneEntry) {
+    selection.sceneRecord(target.sceneId, "the target scene record (scene entry)", { priority: 1, required: true });
+    relevant.add(target.sceneId);
+  }
+  switch (request.task) {
+    case "plan": {
+      selection.outline(2);
+      selection.plans(null, 2);
+      selection.profiles(selection.entries((entry) => entry.type === "character").map((entry) => entry.id), "character profile", 3);
+      selection.allDecisions({ accepted: 3, proposed: 5 });
+      selection.issues(null, 3);
+      break;
+    }
+    case "publish": {
+      selection.outline(2);
+      for (const entry of selection.entries((item) => item.type === "matter"))
+        selection.addRecord(entry, "front or back matter", { priority: 2 });
+      selection.decisions([], { accepted: 3, proposed: 5 });
+      selection.issues(null, 3);
+      break;
+    }
+    case "world": {
+      const world = selection.entries((entry) => WORLD_TYPES.has(entry.type));
+      selection.profiles(world.map((entry) => entry.id), "world entity or term; stable profile", 2);
+      const ids = new Set(world.map((entry) => entry.id));
+      selection.decisions([...ids], { accepted: 4, proposed: 6 });
+      selection.issues(ids, 4);
+      break;
+    }
+    case "memory": {
+      if (sceneEntry) {
+        selection.state(target, relevant, { relevant: 2, unresolved: 3, other: 2 });
+      } else {
+        for (const entry of factEntries(project)) {
+          if (entry.record.status !== "established")
+            continue;
+          const problem = provenanceProblem(project.root, entry);
+          if (problem)
+            selection.addRecord(entry, `established but unresolved (${problem.reason}: ${problem.detail})`, { priority: 3 }, "unresolved-fact");
+          else
+            selection.factItem(entry, "established fact", 2);
+        }
+      }
+      selection.allDecisions({ accepted: 4, proposed: 6 });
+      selection.issues(null, 4);
+      break;
+    }
+    case "research": {
+      selection.research(null, 2);
+      break;
+    }
+    case "series": {
+      for (const entry of selection.entries((item) => item.type === "series"))
+        selection.addRecord(entry, "series record", { priority: 2 });
+      break;
+    }
+  }
+}
+function readerTask(selection) {
+  const { request, order, chronology, project } = selection;
+  const target = request.target;
+  const scene = order.get(target.sceneId);
+  const boundary = readingKeyOf(order, target.sceneId, target.beatId, target.side);
+  selection.addProse(target.sceneId, "read so far in the boundary scene; the reading boundary", { priority: 1, required: true }, { until: { beatId: target.beatId, side: target.side } });
+  for (const earlier of chronology.readingOrder.slice(0, scene.position).reverse()) {
+    selection.addProse(earlier.sceneId, "read before the reading boundary", { priority: 2 });
+  }
+  const state = resolveState(project, target, { chronology });
+  for (const fact of state.facts) {
+    const entry = project.records.get(fact.id);
+    if (entry.record.kind !== "reader-reveal" || !revealedBy(order, entry.record, boundary))
+      continue;
+    selection.addRecord(entry, "reader reveal already delivered by prose before the reading boundary", { priority: 3 }, "reveal");
+  }
+}
+function revealedBy(order, record, boundary) {
+  const from = record["valid-from"];
+  if (from !== undefined && from !== "baseline") {
+    const key = readingKeyOf(order, from.scene, from.beat, from.side);
+    if (key === null || compareKeys(key, boundary) > 0)
+      return false;
+  }
+  const sources = record.sources ?? [];
+  return sources.every((source) => {
+    if (typeof source.scene !== "string")
+      return false;
+    const key = readingKeyOf(order, source.scene, source.beat, "after");
+    return key !== null && compareKeys(key, boundary) <= 0;
+  });
+}
+function selectCandidates(project, request, chronology) {
+  const selection = new Selection(project, request, chronology);
+  const sceneEntry = selection.target();
+  if (selection.fatal)
+    return selection.finish();
+  selection.constraints();
+  if (request.audience === "reader") {
+    readerTask(selection);
+    return selection.finish();
+  }
+  const projectEntry = selection.projectContract();
+  selection.includes();
+  if (selection.fatal)
+    return selection.finish();
+  if (STYLE_TASKS.has(request.task))
+    sceneTask(selection, sceneEntry);
+  else
+    projectTask(selection, sceneEntry);
+  if (STYLE_TASKS.has(request.task))
+    selection.styles(projectEntry);
+  return selection.finish();
+}
+
+// src/context/build.js
+var TASKS = Object.freeze(["plan", "draft", "revise", "review", "world", "memory", "research", "series", "image", "publish"]);
+var SCENE_TASKS = Object.freeze(["draft", "revise", "review", "image"]);
+var AUDIENCES = Object.freeze(["writer", "reader"]);
+var DEFAULT_MAX_BYTES = 48000;
+function isObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+function normalizeTarget(value, problems) {
+  if (value === undefined || value === null)
+    return null;
+  if (!isObject(value) || typeof value.sceneId !== "string" || value.sceneId === "" || value.side !== "before" && value.side !== "after") {
+    problems.push("target needs sceneId and side before or after");
+    return null;
+  }
+  const target = { sceneId: value.sceneId };
+  if (value.beatId !== undefined && value.beatId !== null) {
+    if (typeof value.beatId !== "string" || !ID_PATTERN.test(value.beatId)) {
+      problems.push("target beatId must be a beat id");
+      return null;
+    }
+    target.beatId = value.beatId;
+  }
+  target.side = value.side;
+  return target;
+}
+function validateRequest(input) {
+  const raw = isObject(input) ? input : {};
+  const problems = [];
+  const task = TASKS.includes(raw.task) ? raw.task : null;
+  if (task === null)
+    problems.push(`task must be one of ${TASKS.join(", ")}`);
+  const hadTarget = raw.target !== undefined && raw.target !== null;
+  const target = normalizeTarget(raw.target, problems);
+  if (task !== null && SCENE_TASKS.includes(task) && !hadTarget)
+    problems.push(`Task ${task} needs a target scene cursor`);
+  const audience = raw.audience ?? "writer";
+  if (!AUDIENCES.includes(audience))
+    problems.push("audience must be writer or reader");
+  if (audience === "reader" && task !== null && task !== "review")
+    problems.push("audience reader is a reader simulation; use task review");
+  let maxBytes = DEFAULT_MAX_BYTES;
+  if (raw.maxBytes !== undefined) {
+    if (Number.isInteger(raw.maxBytes) && raw.maxBytes > 0)
+      maxBytes = raw.maxBytes;
+    else
+      problems.push("maxBytes must be a positive integer");
+  }
+  let constraints = [];
+  if (raw.constraints !== undefined) {
+    if (Array.isArray(raw.constraints) && raw.constraints.every((item) => typeof item === "string" && item.trim() !== ""))
+      constraints = [...raw.constraints];
+    else
+      problems.push("constraints must be non-empty strings");
+  }
+  let include = [];
+  if (raw.include !== undefined) {
+    if (Array.isArray(raw.include) && raw.include.every((item) => typeof item === "string" && ID_PATTERN.test(item)))
+      include = [...new Set(raw.include)];
+    else
+      problems.push("include must list record ids");
+  }
+  if (audience === "reader" && include.length > 0)
+    problems.push("a reader simulation cannot include records outside its reading boundary");
+  return {
+    problems,
+    request: { task, target, audience: AUDIENCES.includes(audience) ? audience : "writer", constraints, include, maxBytes }
+  };
+}
+function header(request) {
+  return { operation: request.task, audience: request.audience, target: request.target, maxBytes: request.maxBytes };
+}
+function settled(packet) {
+  let bytes = packetBytes(packet);
+  while (packet.bytes !== bytes) {
+    packet.bytes = bytes;
+    bytes = packetBytes(packet);
+  }
+  return packet;
+}
+function emptyPacket(request, diagnostics) {
+  return settled({ ...header(request), bytes: 0, items: [], impact: [], omissions: [], required: [], diagnostics });
+}
+function buildContext(project, input) {
+  const { problems, request } = validateRequest(input);
+  if (problems.length > 0) {
+    return emptyPacket(request, problems.map((message) => ({
+      code: "REQUEST_INVALID",
+      severity: "error",
+      message,
+      recordIds: [],
+      sources: [],
+      evidence: "structural",
+      action: "Fix the context request and try again."
+    })));
+  }
+  const chronology = buildChronology(project);
+  const selection = selectCandidates(project, request, chronology);
+  if (selection.fatal)
+    return emptyPacket(request, selection.diagnostics);
+  return fitBudget(header(request), selection.candidates, request.maxBytes, selection.diagnostics);
+}
+
+// src/context/cache.js
+var CACHE_VERSION = 1;
+var CACHE_DIRECTORY = path19.join(".story", "cache", "context");
+var slash4 = (value) => value.split("\\").join("/");
+function fileHash(root, relative3) {
+  try {
+    return sha256Hex(fs18.readFileSync(resolveWithinRoot(root, relative3)));
+  } catch {
+    return null;
+  }
+}
+function dependencies(project) {
+  const entries = [...project.records.values(), ...project.unindexed ?? []];
+  const hashes = new Map;
+  for (const entry of entries)
+    hashes.set(slash4(entry.path), entry.hash);
+  const named = new Set;
+  for (const entry of project.records.values()) {
+    if (entry.type === "project")
+      for (const relative3 of entry.record["style-sources"] ?? [])
+        named.add(relative3);
+    for (const field of ["sources", "evidence"]) {
+      if (!Array.isArray(entry.record[field]))
+        continue;
+      for (const source of entry.record[field]) {
+        if (source && typeof source.path === "string")
+          named.add(source.path);
+      }
+    }
+  }
+  for (const relative3 of named) {
+    if (!hashes.has(relative3))
+      hashes.set(relative3, fileHash(project.root, relative3));
+  }
+  return [...hashes].sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0);
+}
+function keyFor(project, request, schemaVersion) {
+  return sha256Hex(Buffer.from(JSON.stringify({
+    cacheVersion: CACHE_VERSION,
+    schemaVersion,
+    request,
+    dependencies: dependencies(project)
+  }), "utf8"));
+}
+function readEntry(file, key, schemaVersion) {
+  try {
+    const entry = JSON.parse(fs18.readFileSync(file, "utf8"));
+    if (entry.cacheVersion !== CACHE_VERSION || entry.schemaVersion !== schemaVersion || entry.key !== key)
+      return null;
+    if (!entry.packet || typeof entry.packet !== "object")
+      return null;
+    return entry.packet;
+  } catch {
+    return null;
+  }
+}
+function removeQuietly(file) {
+  try {
+    fs18.rmSync(file, { force: true });
+  } catch {}
+}
+function writeEntry(root, file, entry) {
+  const temporary = `${file}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    assertWritableTarget(root, file);
+    fs18.mkdirSync(path19.dirname(file), { recursive: true });
+    fs18.writeFileSync(temporary, JSON.stringify(entry));
+    fs18.renameSync(temporary, file);
+    return null;
+  } catch (error) {
+    removeQuietly(temporary);
+    return `Context cache not written to ${slash4(path19.relative(root, file))}: ${error.message}`;
+  }
+}
+function cachedContext(project, input, options = {}) {
+  const schemaVersion = options.schemaVersion ?? SCHEMA_VERSION;
+  const { problems, request } = validateRequest(input);
+  if (problems.length > 0)
+    return { packet: buildContext(project, input), cache: { hit: false, key: null, stored: false } };
+  const key = keyFor(project, request, schemaVersion);
+  const file = path19.join(project.root, CACHE_DIRECTORY, `${key}.json`);
+  const cached = readEntry(file, key, schemaVersion);
+  if (cached)
+    return { packet: cached, cache: { hit: true, key, stored: true } };
+  const packet = buildContext(project, request);
+  const warning2 = writeEntry(project.root, file, { cacheVersion: CACHE_VERSION, schemaVersion, key, packet });
+  const cache = { hit: false, key, stored: warning2 === null };
+  if (warning2 !== null)
+    cache.warning = warning2;
+  return { packet, cache };
+}
+
 // src/memory/facts.js
+import fs19 from "node:fs";
+import path20 from "node:path";
 var NEW_STATUSES2 = new Set(["proposed", "established"]);
 var RETRACTABLE = new Set(["proposed", "established"]);
 function addFact(root, options = {}) {
@@ -24348,7 +25566,7 @@ function addFact(root, options = {}) {
   const schema = validateRecord(record);
   if (schema.length > 0)
     return findingsResult(command, schema, 2);
-  const taken = new Set(fs16.existsSync(path18.join(root, "facts")) ? fs16.readdirSync(path18.join(root, "facts")) : []);
+  const taken = new Set(fs19.existsSync(path20.join(root, "facts")) ? fs19.readdirSync(path20.join(root, "facts")) : []);
   const relative3 = `facts/${uniqueFilename(record.id, record.id, taken)}`;
   const entry = { id: record.id, type: "fact", path: relative3, record, body: "", valid: true };
   const withFact = { records: new Map([...project.records, [record.id, entry]]), unindexed: project.unindexed };
@@ -24394,7 +25612,7 @@ function workFacts(root) {
   const walk = (relative3) => {
     let entries;
     try {
-      entries = fs16.readdirSync(path18.join(root, relative3), { withFileTypes: true });
+      entries = fs19.readdirSync(path20.join(root, relative3), { withFileTypes: true });
     } catch {
       return;
     }
@@ -24405,7 +25623,7 @@ function workFacts(root) {
       else if (item.isFile() && item.name.endsWith(".md")) {
         let data;
         try {
-          data = parseFrontmatter(fs16.readFileSync(path18.join(root, child), "utf8"), child).data;
+          data = parseFrontmatter(fs19.readFileSync(path20.join(root, child), "utf8"), child).data;
         } catch {
           continue;
         }
@@ -24507,10 +25725,10 @@ function retractFact(root, id, options = {}) {
   if (!RETRACTABLE.has(from)) {
     return failure(command, `Fact ${id} is ${from}; only proposed or established facts can be retracted`, "FACT_TRANSITION_INVALID", 1, [id]);
   }
-  const markdown = fs16.readFileSync(path18.join(root, entry.path), "utf8");
+  const markdown = fs19.readFileSync(path20.join(root, entry.path), "utf8");
   const parsed = parseFrontmatter(markdown, entry.path);
   const content = replaceFrontmatter(markdown, { ...parsed.data, status: "retracted" });
-  const relative3 = entry.path.split(path18.sep).join("/");
+  const relative3 = entry.path.split(path20.sep).join("/");
   const writes = [{ path: relative3, action: "replace", expectedHash: entry.hash, content }];
   try {
     const recorded = commit(root, writes, options.dryRun === true);
@@ -24531,15 +25749,15 @@ function retractFact(root, id, options = {}) {
 }
 
 // src/cli/handlers/fact.js
-function optionValue3(value) {
+function optionValue2(value) {
   return Array.isArray(value) ? value[value.length - 1] : value;
 }
 function cursorOption(options) {
-  const sceneId = optionValue3(options.scene);
+  const sceneId = optionValue2(options.scene);
   if (sceneId === undefined)
     return;
-  const cursor = { sceneId: String(sceneId), side: optionValue3(options.side) ?? "before" };
-  const beatId = optionValue3(options.beat);
+  const cursor = { sceneId: String(sceneId), side: optionValue2(options.side) ?? "before" };
+  const beatId = optionValue2(options.beat);
   if (beatId !== undefined)
     cursor.beatId = String(beatId);
   return cursor;
@@ -24547,7 +25765,7 @@ function cursorOption(options) {
 function addFactCommand(ctx) {
   return present(ctx, addFact(ctx.root(), {
     cwd: ctx.cwd,
-    dataPath: optionValue3(ctx.parsed.options.data),
+    dataPath: optionValue2(ctx.parsed.options.data),
     dryRun: isTruthy(ctx.parsed.options["dry-run"])
   }));
 }
@@ -24555,8 +25773,8 @@ function listFactsCommand(ctx) {
   const options = ctx.parsed.options;
   return present(ctx, listFacts(ctx.root(), {
     cursor: cursorOption(options),
-    beatId: optionValue3(options.beat),
-    side: optionValue3(options.side),
+    beatId: optionValue2(options.beat),
+    side: optionValue2(options.side),
     includeInactive: isTruthy(options["include-inactive"]),
     includeWork: isTruthy(options["include-work"])
   }));
@@ -24567,332 +25785,190 @@ function retractFactCommand(ctx) {
   }));
 }
 
-// src/memory/issues.js
-import fs17 from "node:fs";
-import path19 from "node:path";
-var byId2 = (left, right) => left.id.localeCompare(right.id, "en");
-function list2(value) {
-  return Array.isArray(value) ? value.filter((item) => typeof item === "string") : [];
+// src/cli/handlers/context.js
+var COMMAND = "context";
+function optionValue3(value) {
+  return Array.isArray(value) ? value[value.length - 1] : value;
 }
-function evidenceList(record) {
-  return Array.isArray(record.evidence) ? record.evidence.filter((item) => item && typeof item === "object" && typeof item.path === "string") : [];
+function optionList(value) {
+  if (value === undefined)
+    return;
+  return (Array.isArray(value) ? value : [value]).map(String);
 }
-function issueEntries(project) {
-  return [...project.records.values()].filter((entry) => entry.type === "issue").sort(byId2);
+function invalid2(messages) {
+  const diagnostics = messages.map((message) => finding({
+    code: "INVALID_INVOCATION",
+    message,
+    action: "Pass --task, plus --scene [--beat] [--side] for draft, revise, review and image."
+  }));
+  return { envelope: envelope({ command: COMMAND, ok: false, diagnostics }), exitCode: 2, text: `${messages.join(`
+`)}
+` };
 }
-function currentHash(root, ref) {
-  try {
-    return sourceHash(root, { path: ref.path, sceneId: ref.scene, beatId: ref.beat });
-  } catch {
-    return null;
+function requestFrom(options) {
+  const problems = [];
+  const request = { task: optionValue3(options.task) };
+  const target = cursorOption(options);
+  if (target !== undefined)
+    request.target = target;
+  else if (options.beat !== undefined || options.side !== undefined)
+    problems.push("--beat and --side need --scene");
+  const audience = optionValue3(options.audience);
+  if (audience !== undefined)
+    request.audience = audience;
+  const constraints = optionList(options.constraint);
+  if (constraints !== undefined)
+    request.constraints = constraints;
+  const include = optionList(options.include);
+  if (include !== undefined)
+    request.include = include;
+  const maxBytes = optionValue3(options["max-bytes"]);
+  if (maxBytes !== undefined) {
+    if (/^[0-9]+$/.test(String(maxBytes)) && Number(maxBytes) > 0)
+      request.maxBytes = Number(maxBytes);
+    else
+      problems.push("--max-bytes must be a positive integer");
   }
+  return { request, problems };
 }
-function changedEvidence(root, record) {
-  const changed = [];
-  for (const ref of evidenceList(record)) {
-    const current = currentHash(root, ref);
-    if (current === ref.hash)
-      continue;
-    const item = { path: ref.path };
-    if (ref.scene !== undefined)
-      item.scene = ref.scene;
-    if (ref.beat !== undefined)
-      item.beat = ref.beat;
-    item.recorded = ref.hash;
-    item.current = current;
-    changed.push(item);
-  }
-  return changed;
+function sourceText(source) {
+  let where = source.path;
+  if (source.index !== undefined)
+    where += `#${source.index}`;
+  if (source.scene !== undefined)
+    where += `#${source.scene}${source.beat === undefined ? "" : `/${source.beat}`}`;
+  if (source.until !== undefined)
+    where += ` until ${source.until.side} ${source.until.beat}`;
+  return `${where} [${source.kind}]`;
 }
-function unboundReason(record) {
-  const dismissal = record.dismissal;
-  if (!dismissal || typeof dismissal !== "object")
-    return "has no dismissal record";
-  if (typeof dismissal.code !== "string" || dismissal.code === "")
-    return "does not name an exact diagnostic code";
-  const affected = list2(record["affected-ids"]);
-  if (affected.length === 0)
-    return "has no affected ids";
-  if (evidenceList(record).length === 0)
-    return "has no evidence fingerprints";
-  const recordId = dismissal["record-id"];
-  if (recordId !== undefined && !affected.includes(recordId))
-    return `names record ${recordId}, which is not an affected id`;
-  return null;
-}
-function refreshIssueEvidence(project) {
-  return issueEntries(project).map((entry) => {
-    const record = entry.record;
-    const changed = changedEvidence(project.root, record);
-    const reopen = record.status === "dismissed" && changed.length > 0;
-    return {
-      id: entry.id,
-      status: reopen ? "open" : record.status,
-      storedStatus: record.status,
-      category: record.category,
-      severity: record.severity,
-      affectedIds: list2(record["affected-ids"]),
-      evidence: evidenceList(record),
-      dismissal: record.dismissal ?? null,
-      changedEvidence: changed,
-      reopened: reopen ? { from: "dismissed", dismissal: record.dismissal ?? null } : null,
-      bound: record.status !== "dismissed" || unboundReason(record) === null,
-      path: entry.path.split("\\").join("/")
-    };
-  });
-}
-function describeDismissal(dismissal) {
-  if (!dismissal)
-    return "was dismissed";
-  const code = typeof dismissal.code === "string" && dismissal.code !== "" ? ` (${dismissal.code})` : "";
-  return `was dismissed${code}: ${dismissal.reason}`;
-}
-function issueFindings(project, issues = refreshIssueEvidence(project)) {
-  const findings = [];
-  const entries = new Map(issueEntries(project).map((entry) => [entry.id, entry]));
-  for (const issue3 of issues) {
-    if (issue3.reopened) {
-      const paths = issue3.changedEvidence.map((item) => item.path).join(", ");
-      findings.push(finding({
-        code: "ISSUE_REOPENED",
-        severity: "warning",
-        message: `${issue3.path}: evidence changed in ${paths}, so ${issue3.id} is open for review. It ${describeDismissal(issue3.reopened.dismissal)}`,
-        recordIds: [issue3.id, ...issue3.affectedIds],
-        sources: issue3.evidence,
-        evidence: "source",
-        action: "Inspect the changed evidence, then resolve the issue or dismiss it again against the current text."
-      }));
-      continue;
-    }
-    if (issue3.storedStatus !== "dismissed")
-      continue;
-    const reason = unboundReason(entries.get(issue3.id).record);
-    if (reason === null)
-      continue;
-    findings.push(finding({
-      code: "ISSUE_DISMISSAL_UNBOUND",
-      message: `${issue3.path}: dismissed issue ${issue3.id} ${reason}, so it cannot dismiss any finding`,
-      recordIds: [issue3.id],
-      action: "Give the dismissal an exact diagnostic code, list the affected ids, and record the evidence it was judged against."
-    }));
-  }
-  return findings;
-}
-var HISTORY_HEADING = /^## History[ \t]*$/m;
-var DISMISSAL_KEYS = new Set(["code", "record-id", "reason"]);
-function appendHistory(body, lines) {
-  const base = body.replace(/\s*$/, "");
-  const entries = lines.map((line) => `- ${line}
-`).join("");
-  if (HISTORY_HEADING.test(base))
-    return `${base}
-${entries}`;
-  return `${base === "" ? `
-` : `${base}
-
-`}## History
-
-${entries}`;
-}
-function summarizeIssue(issue3) {
-  const { bound, ...rest } = issue3;
-  return rest;
-}
-function describeIssue(issue3) {
-  const affects = issue3.affectedIds.length === 0 ? "" : ` affects ${issue3.affectedIds.join(", ")}`;
-  let line = `- ${issue3.id} [${issue3.status} ${issue3.severity} ${issue3.category}]${affects}`;
-  if (issue3.reopened)
-    line += ` (reopened; ${describeDismissal(issue3.reopened.dismissal)})`;
-  else if (issue3.status === "dismissed" && issue3.dismissal)
-    line += ` (${describeDismissal(issue3.dismissal)})`;
-  return line;
-}
-function addIssue(root, options = {}) {
-  const command = "issue add";
-  if (options.dataPath === undefined)
-    return invalid(command, "Usage: story issue add --data <json-file>");
-  const opened = openProject(root, command);
-  if (opened.error)
-    return opened.error;
-  const { project } = opened;
-  const blocked = loadErrorResult(command, project);
-  if (blocked)
-    return blocked;
-  const read = readData(command, options.cwd ?? process.cwd(), options.dataPath);
-  if (read.error)
-    return read.error;
-  const record = { format: FORMAT, "schema-version": SCHEMA_VERSION, id: read.data.id, type: "issue", status: "open", ...read.data };
-  if (record.type !== "issue")
-    return invalid(command, "issue add creates records of type issue");
-  if (record.id === undefined)
-    record.id = allocateId("issue", new Set(project.records.keys()));
-  if (typeof record.id !== "string" || !ID_PATTERN.test(record.id))
-    return invalid(command, `Invalid id: ${record.id}`);
-  if (project.records.has(record.id)) {
-    return failure(command, `Record id ${record.id} is already used`, "DUPLICATE_RECORD_ID", 1, [record.id]);
-  }
-  if (record.status !== "open")
-    return invalid(command, "A new issue is open; use issue resolve or issue dismiss to close it");
-  if (record.dismissal !== undefined)
-    return invalid(command, "Use story issue dismiss <id> to dismiss an issue");
-  const unreadable = hashRefs(command, root, record, "evidence");
-  if (unreadable)
-    return unreadable;
-  const schema = validateRecord(record);
-  if (schema.length > 0)
-    return findingsResult(command, schema, 2);
-  const relative3 = `issues/${uniqueFilename(record.id, record.id, takenNames(root, "issues"))}`;
-  const entry = { id: record.id, type: "issue", path: relative3, record, body: "", valid: true };
-  const withIssue = { records: new Map([...project.records, [record.id, entry]]), unindexed: project.unindexed };
-  const dangling = danglingReferenceDiagnostics(withIssue).filter((item) => item.recordIds[1] === record.id);
-  if (dangling.length > 0)
-    return findingsResult(command, dangling, 1);
-  const content = `${stringifyFrontmatter(record)}## History
-
-- opened
+function contentText(content) {
+  if (typeof content === "string")
+    return content.endsWith(`
+`) ? content : `${content}
 `;
-  const [summary] = refreshIssueEvidence({ root, records: new Map([[record.id, entry]]) });
-  return writeResult(command, root, [{ path: relative3, action: "create", expectedHash: null, content }], options, {
-    data: summarizeIssue(summary),
-    text: `Added issue ${record.id}: ${relative3}
-`
-  });
+  if (Array.isArray(content))
+    return `${JSON.stringify(content, null, 2)}
+`;
+  const { body, ...rest } = content;
+  const fields = `${JSON.stringify(rest.record ?? rest, null, 2)}
+`;
+  return body === undefined ? fields : `${fields}${body.endsWith(`
+`) ? body : `${body}
+`}`;
 }
-function listIssues(root, options = {}) {
-  const command = "issue list";
-  const opened = openProject(root, command);
-  if (opened.error)
-    return opened.error;
-  const { project } = opened;
-  const record = options.record ?? null;
-  if (record !== null && !project.records.has(record)) {
-    return failure(command, `No record with id ${record}`, "RECORD_NOT_FOUND", 1, [record]);
+function itemText(item) {
+  return [
+    `## ${item.id} (${item.kind}${item.required ? ", required" : ""})`,
+    `Why: ${item.reason}`,
+    `Sources: ${item.sources.map(sourceText).join("; ")}`,
+    contentText(item.content)
+  ].join(`
+`);
+}
+function targetText(target) {
+  if (target === null)
+    return "";
+  if (target.beatId === undefined)
+    return ` at ${target.sceneId} ${target.side}`;
+  return ` at ${target.sceneId} ${target.side} ${target.beatId}`;
+}
+function cacheText(cache) {
+  if (cache.warning !== undefined)
+    return `Cache: not stored (${cache.warning})`;
+  return `Cache: ${cache.hit ? "hit" : "miss"} (key ${cache.key.slice(0, 12)})`;
+}
+function packetText(packet, cache) {
+  const lines = [
+    `Context: ${packet.operation}${targetText(packet.target)} (${packet.audience})`,
+    `Budget: ${packet.bytes} of ${packet.maxBytes} bytes`,
+    cacheText(cache),
+    ""
+  ];
+  for (const item of packet.items)
+    lines.push(itemText(item));
+  if (packet.impact.length > 0) {
+    lines.push("Impact (later material; not writer knowledge):", "");
+    for (const item of packet.impact)
+      lines.push(itemText(item));
   }
-  const all = refreshIssueEvidence(project);
-  const diagnostics = issueFindings(project, all);
-  const issues = all.filter((item) => options.includeInactive === true || item.status === "open").filter((item) => record === null || item.affectedIds.includes(record)).map(summarizeIssue);
-  const ok = !diagnostics.some((item) => item.severity === "error");
-  const lines = [record === null ? "Issues:" : `Issues affecting ${record}:`];
-  if (issues.length === 0)
-    lines.push("- None");
-  for (const item of issues)
-    lines.push(describeIssue(item));
-  if (diagnostics.length > 0) {
-    lines.push("", "Diagnostics:");
-    for (const item of diagnostics)
+  if (packet.omissions.length > 0) {
+    lines.push("Omitted (over the byte budget):");
+    for (const item of packet.omissions)
+      lines.push(`- ${item.id} (${item.kind}, ${item.bytes} bytes): retrieve with --include ${item.retrieval}`);
+    lines.push("");
+  }
+  if (packet.required.length > 0) {
+    lines.push("Required material that did not fit:");
+    for (const item of packet.required)
+      lines.push(`- ${item.id} (${item.kind}, ${item.bytes} bytes): ${item.reason}`);
+    lines.push("");
+  }
+  if (packet.diagnostics.length > 0) {
+    lines.push("Diagnostics:");
+    for (const item of packet.diagnostics)
       lines.push(`- ${item.severity} ${item.code}: ${item.message}`);
   }
+  return `${lines.join(`
+`).replace(/\n+$/, "")}
+`;
+}
+function contextCommand(ctx) {
+  return present(ctx, contextResult(ctx.root(), ctx.parsed.options));
+}
+function contextResult(root, options) {
+  const { request, problems } = requestFrom(options);
+  problems.push(...validateRequest(request).problems);
+  if (problems.length > 0)
+    return invalid2(problems);
+  const opened = openProject(root, COMMAND);
+  if (opened.error)
+    return opened.error;
+  const blocked = loadErrorResult(COMMAND, opened.project);
+  if (blocked)
+    return blocked;
+  const { packet, cache } = cachedContext(opened.project, request);
+  const ok = !packet.diagnostics.some((item) => item.severity === "error");
   return {
-    envelope: envelope({ command, ok, data: { record, issues }, diagnostics }),
+    envelope: envelope({ command: COMMAND, ok, data: { packet, cache }, diagnostics: packet.diagnostics }),
     exitCode: ok ? 0 : 1,
-    text: `${lines.join(`
-`)}
-`
+    text: packetText(packet, cache)
   };
 }
-function openIssue(command, root, id) {
-  const opened = openProject(root, command);
-  if (opened.error)
-    return { error: opened.error };
-  const { project } = opened;
-  const blocked = loadErrorResult(command, project);
-  if (blocked)
-    return { error: blocked };
-  const entry = project.records.get(id);
-  if (!entry || entry.type !== "issue") {
-    return { error: failure(command, `No issue with id ${id}`, "ISSUE_NOT_FOUND", 1, [id]) };
-  }
-  const [issue3] = refreshIssueEvidence({ root: project.root, records: new Map([[id, entry]]) });
-  if (issue3.status !== "open") {
-    return { error: failure(command, `Issue ${id} is ${issue3.status}; only an open issue can be resolved or dismissed`, "ISSUE_TRANSITION_INVALID", 1, [id]) };
-  }
-  return { project, entry, issue: issue3 };
+
+// src/cli/handlers/decision.js
+function optionValue4(value) {
+  return Array.isArray(value) ? value[value.length - 1] : value;
 }
-function reopenedLine(issue3) {
-  const paths = issue3.changedEvidence.map((item) => item.path).join(", ");
-  return `reopened: evidence changed in ${paths}; it ${describeDismissal(issue3.reopened.dismissal)}`;
+function addDecisionCommand(ctx) {
+  return present(ctx, addDecision(ctx.root(), {
+    cwd: ctx.cwd,
+    dataPath: optionValue4(ctx.parsed.options.data),
+    dryRun: isTruthy(ctx.parsed.options["dry-run"])
+  }));
 }
-function transition(command, root, target, data, history, options, verb) {
-  const { entry, issue: issue3 } = target;
-  const markdown = fs17.readFileSync(path19.join(root, entry.path), "utf8");
-  const parsed = parseFrontmatter(markdown, entry.path);
-  const lines = issue3.reopened ? [reopenedLine(issue3), history] : [history];
-  const content = replaceFrontmatter(markdown, { ...parsed.data, ...data }, appendHistory(parsed.body, lines));
-  const relative3 = entry.path.split(path19.sep).join("/");
-  return writeResult(command, root, [{ path: relative3, action: "replace", expectedHash: entry.hash, content }], options, {
-    data: { id: entry.id, path: relative3, from: "open", to: data.status, reopened: issue3.reopened },
-    text: `${verb} issue ${entry.id}: ${relative3}
-`
-  });
+function listDecisionsCommand(ctx) {
+  const record = optionValue4(ctx.parsed.options.record);
+  return present(ctx, listDecisions(ctx.root(), {
+    includeInactive: isTruthy(ctx.parsed.options["include-inactive"]),
+    record: record === undefined ? undefined : String(record)
+  }));
 }
-function optionalData(command, options) {
-  if (options.dataPath === undefined)
-    return { data: {} };
-  return readData(command, options.cwd ?? process.cwd(), options.dataPath);
-}
-function resolveIssue(root, id, options = {}) {
-  const command = "issue resolve";
-  if (!id)
-    return invalid(command, "Usage: story issue resolve <id> [--data <json-file>]");
-  const target = openIssue(command, root, id);
-  if (target.error)
-    return target.error;
-  const read = optionalData(command, options);
-  if (read.error)
-    return read.error;
-  const extra = Object.keys(read.data).filter((key) => key !== "reason");
-  if (extra.length > 0)
-    return invalid(command, `issue resolve --data accepts only reason, not ${extra.join(", ")}`);
-  const reason = read.data.reason;
-  if (reason !== undefined && (typeof reason !== "string" || reason === "")) {
-    return invalid(command, "reason must be non-empty text");
-  }
-  const history = reason === undefined ? "resolved" : `resolved: ${reason}`;
-  return transition(command, root, target, { status: "resolved", dismissal: undefined }, history, options, "Resolved");
-}
-function dismissIssue(root, id, options = {}) {
-  const command = "issue dismiss";
-  if (!id || options.dataPath === undefined)
-    return invalid(command, "Usage: story issue dismiss <id> --data <json-file>");
-  const target = openIssue(command, root, id);
-  if (target.error)
-    return target.error;
-  const read = readData(command, options.cwd ?? process.cwd(), options.dataPath);
-  if (read.error)
-    return read.error;
-  const dismissal = read.data;
-  const extra = Object.keys(dismissal).filter((key) => !DISMISSAL_KEYS.has(key));
-  if (extra.length > 0)
-    return invalid(command, `issue dismiss --data accepts code, record-id and reason, not ${extra.join(", ")}`);
-  if (typeof dismissal.code !== "string" || dismissal.code === "")
-    return invalid(command, "A dismissal names one exact diagnostic code");
-  if (typeof dismissal.reason !== "string" || dismissal.reason === "")
-    return invalid(command, "A dismissal needs a reason");
-  if (dismissal["record-id"] !== undefined && typeof dismissal["record-id"] !== "string")
-    return invalid(command, "record-id must be a record id");
-  const record = { ...target.entry.record, status: "dismissed", dismissal };
-  const unbound = unboundReason(record);
-  if (unbound !== null) {
-    return failure(command, `Issue ${id} ${unbound}, so a dismissal could not be matched exactly`, "ISSUE_DISMISSAL_UNBOUND", 1, [id]);
-  }
-  const evidence = record.evidence.map((ref) => ({ ...ref }));
-  const fingerprinted = { id, evidence };
-  const unreadable = hashRefs(command, root, fingerprinted, "evidence", true);
-  if (unreadable)
-    return unreadable;
-  const on = dismissal["record-id"] === undefined ? "" : ` on ${dismissal["record-id"]}`;
-  const history = `dismissed (${dismissal.code}${on}): ${dismissal.reason}`;
-  return transition(command, root, target, { status: "dismissed", dismissal, evidence }, history, options, "Dismissed");
+function supersedeDecisionCommand(ctx) {
+  return present(ctx, supersedeDecision(ctx.root(), ctx.parsed.positionals[2], {
+    cwd: ctx.cwd,
+    dataPath: optionValue4(ctx.parsed.options.data),
+    dryRun: isTruthy(ctx.parsed.options["dry-run"])
+  }));
 }
 
 // src/cli/handlers/issue.js
-function optionValue4(value) {
+function optionValue5(value) {
   return Array.isArray(value) ? value[value.length - 1] : value;
 }
 function mutation(ctx) {
   return {
     cwd: ctx.cwd,
-    dataPath: optionValue4(ctx.parsed.options.data),
+    dataPath: optionValue5(ctx.parsed.options.data),
     dryRun: isTruthy(ctx.parsed.options["dry-run"])
   };
 }
@@ -24900,7 +25976,7 @@ function addIssueCommand(ctx) {
   return present(ctx, addIssue(ctx.root(), mutation(ctx)));
 }
 function listIssuesCommand(ctx) {
-  const record = optionValue4(ctx.parsed.options.record);
+  const record = optionValue5(ctx.parsed.options.record);
   return present(ctx, listIssues(ctx.root(), {
     includeInactive: isTruthy(ctx.parsed.options["include-inactive"]),
     record: record === undefined ? undefined : String(record)
@@ -24913,91 +25989,9 @@ function dismissIssueCommand(ctx) {
   return present(ctx, dismissIssue(ctx.root(), ctx.parsed.positionals[2], mutation(ctx)));
 }
 
-// src/state/knowledge.js
-var PROFILE_TYPES = new Set(["character", "location", "system", "faction", "object"]);
-var EPISTEMIC_KINDS = new Set(["knowledge", "belief"]);
-var CURSOR_CODES = new Set(["INVALID_CURSOR", "MISSING_SCENE", "MISSING_BEAT"]);
-var HISTORY_HEADING2 = /^#{1,6}\s+(?:history|backstory|biography|timeline|later life|fate|future)\b/i;
-var DATED_ENTRY = /^\s*(?:[-*+]\s+)?(?:\d{1,4}|year\s+\d+|age\s+\d+|chapter\s+\d+|book\s+\d+)\s*(?:[:\u2013\u2014]|-\s)/i;
-var LATER_PHRASE = /\b(?:years later|later in life|eventually|by the end of the (?:story|book|series)|will (?:die|become|betray|learn|lose|marry|kill|leave|discover))\b/i;
-function temporalLine(body) {
-  const lines = body.split(/\r?\n/);
-  for (let index = 0;index < lines.length; index += 1) {
-    const line = lines[index];
-    if (HISTORY_HEADING2.test(line) || DATED_ENTRY.test(line) || LATER_PHRASE.test(line)) {
-      return { number: index + 1, text: line.trim() };
-    }
-  }
-  return null;
-}
-function biographyFindings(project, ids) {
-  const wanted = ids === undefined ? null : new Set(ids);
-  const findings = [];
-  const entries = [...project.records.values()].filter((entry) => PROFILE_TYPES.has(entry.type) && (wanted === null || wanted.has(entry.id))).sort((left, right) => left.id.localeCompare(right.id, "en"));
-  for (const entry of entries) {
-    const line = temporalLine(entry.body ?? "");
-    if (!line)
-      continue;
-    findings.push({
-      code: "UNSPLIT_BIOGRAPHY",
-      severity: "warning",
-      message: `${entry.path}: profile body line ${line.number} looks like temporal history that is not split into facts: "${line.text}"`,
-      recordIds: [entry.id],
-      sources: [],
-      evidence: "candidate",
-      action: "Move dated or later events into facts with valid-from cursors, keeping the profile to stable traits."
-    });
-  }
-  return findings;
-}
-function statementFor(project, value) {
-  if (!isIdReference(value))
-    return null;
-  const target = project.records.get(value);
-  if (!target || target.type !== "fact")
-    return null;
-  const fact = target.record;
-  return { id: target.id, status: fact.status, kind: fact.kind, subject: fact.subject, predicate: fact.predicate, value: fact.value };
-}
-function knowledgeAt(project, characterId, cursor, options = {}) {
-  const entry = project.records.get(characterId);
-  if (!entry || entry.type !== "character") {
-    return {
-      character: null,
-      knows: [],
-      believes: [],
-      unresolved: [],
-      diagnostics: [{
-        code: "CHARACTER_NOT_FOUND",
-        severity: "error",
-        message: `No character with id ${characterId}`,
-        recordIds: [characterId],
-        sources: [],
-        evidence: "structural",
-        action: "Check the id with story entity show, or add the character first."
-      }]
-    };
-  }
-  const state = resolveState(project, cursor, options);
-  const mine = (item) => item.subject === characterId && EPISTEMIC_KINDS.has(item.kind);
-  const withStatement = (item) => ({ ...item, statement: statementFor(project, item.value) });
-  const facts = state.facts.filter(mine).map(withStatement);
-  const unresolved = state.unresolved.filter(mine);
-  const relevant = new Set([...facts, ...unresolved].map((item) => item.id));
-  const diagnostics = state.diagnostics.filter((item) => CURSOR_CODES.has(item.code) || item.recordIds.some((id) => relevant.has(id)));
-  diagnostics.push(...biographyFindings(project, [characterId]));
-  return {
-    character: { id: entry.id, name: entry.record.name ?? entry.record.title ?? "" },
-    knows: facts.filter((item) => item.kind === "knowledge"),
-    believes: facts.filter((item) => item.kind === "belief"),
-    unresolved,
-    diagnostics
-  };
-}
-
 // src/cli/handlers/timeline.js
-import fs18 from "node:fs";
-import path20 from "node:path";
+import fs20 from "node:fs";
+import path21 from "node:path";
 function timelineCommand(ctx) {
   if (isStoryToolkitProject(ctx.root()))
     return toolkitTimeline(ctx);
@@ -25005,7 +25999,7 @@ function timelineCommand(ctx) {
 }
 function isStoryToolkitProject(root) {
   try {
-    const raw = fs18.readFileSync(path20.join(root, "story.md"), "utf8");
+    const raw = fs20.readFileSync(path21.join(root, "story.md"), "utf8");
     return parseFrontmatter(raw, "story.md").data?.format === FORMAT;
   } catch {
     return false;
@@ -25116,7 +26110,7 @@ function formatLegacyTimelineLog(result) {
 }
 
 // src/cli/handlers/knowledge.js
-var COMMAND = "knowledge";
+var COMMAND2 = "knowledge";
 var TOOLKIT_USAGE = "Usage: story knowledge <character-id> --scene <id> [--beat <id>] [--side before|after] [--project <path>]";
 var LEGACY_USAGE = "Usage: story knowledge <character-id> --at <chapter-id> [--path <project>]";
 function knowledgeCommand(ctx) {
@@ -25125,22 +26119,22 @@ function knowledgeCommand(ctx) {
     return present(ctx, toolkitKnowledge(ctx, root));
   return present(ctx, legacyKnowledge(ctx, root));
 }
-function invalid2(message) {
-  return failure(COMMAND, message, "INVALID_INVOCATION", 2);
+function invalid3(message) {
+  return failure(COMMAND2, message, "INVALID_INVOCATION", 2);
 }
 function toolkitKnowledge(ctx, root) {
   const options = ctx.parsed.options;
   if (options.at !== undefined) {
-    return invalid2(`--at is for schema v2 projects; use --scene on a story-toolkit project.
+    return invalid3(`--at is for schema v2 projects; use --scene on a story-toolkit project.
 ${TOOLKIT_USAGE}`);
   }
   const cursor = cursorOption(options);
   if (cursor === undefined)
-    return invalid2(TOOLKIT_USAGE);
-  const opened = openProject(root, COMMAND);
+    return invalid3(TOOLKIT_USAGE);
+  const opened = openProject(root, COMMAND2);
   if (opened.error)
     return opened.error;
-  const blocked = loadErrorResult(COMMAND, opened.project);
+  const blocked = loadErrorResult(COMMAND2, opened.project);
   if (blocked)
     return blocked;
   const characterId = String(ctx.parsed.positionals[1]);
@@ -25154,7 +26148,7 @@ ${TOOLKIT_USAGE}`);
     unresolved: result.unresolved
   };
   return {
-    envelope: envelope({ command: COMMAND, ok, data, diagnostics: result.diagnostics, writes: [] }),
+    envelope: envelope({ command: COMMAND2, ok, data, diagnostics: result.diagnostics, writes: [] }),
     exitCode: ok ? 0 : 1,
     text: formatKnowledge(characterId, data, result.diagnostics)
   };
@@ -25195,13 +26189,13 @@ function formatKnowledge(characterId, data, diagnostics) {
 function legacyKnowledge(ctx, root) {
   const options = ctx.parsed.options;
   if (options.scene !== undefined || options.beat !== undefined || options.side !== undefined) {
-    return invalid2(`--scene is for story-toolkit projects; schema v2 knowledge uses --at.
+    return invalid3(`--scene is for story-toolkit projects; schema v2 knowledge uses --at.
 ${LEGACY_USAGE}`);
   }
   const characterId = String(ctx.parsed.positionals[1]);
   const atChapterId = Array.isArray(options.at) ? options.at.at(-1) : options.at;
   if (typeof atChapterId !== "string")
-    return invalid2(LEGACY_USAGE);
+    return invalid3(LEGACY_USAGE);
   let entries;
   try {
     entries = knowledgeAtChapter(root, characterId, atChapterId);
@@ -25216,7 +26210,7 @@ ${LEGACY_USAGE}`);
   }).join("");
   return {
     envelope: envelope({
-      command: COMMAND,
+      command: COMMAND2,
       ok: true,
       data: { format: "schema-v2", character: characterId, at: atChapterId, entries },
       writes: []
@@ -25228,29 +26222,29 @@ ${LEGACY_USAGE}`);
 function legacyFailure(error) {
   const message = error instanceof Error ? error.message : String(error);
   if (message.includes("is not a story project: missing story.md")) {
-    return failure(COMMAND, message, "PROJECT_NOT_FOUND", 2);
+    return failure(COMMAND2, message, "PROJECT_NOT_FOUND", 2);
   }
   if (error && (error.code === "EACCES" || error.code === "EPERM")) {
-    return failure(COMMAND, message, "OPERATION_FAILED", 4);
+    return failure(COMMAND2, message, "OPERATION_FAILED", 4);
   }
-  return failure(COMMAND, message, "COMMAND_FAILED", 1);
+  return failure(COMMAND2, message, "COMMAND_FAILED", 1);
 }
 
 // src/cli/handlers/project.js
-function optionValue5(value) {
+function optionValue6(value) {
   return Array.isArray(value) ? value[value.length - 1] : value;
 }
 function initToolkitCommand(ctx) {
   return present(ctx, initProject({
     title: ctx.parsed.positionals.slice(1).join(" "),
     cwd: ctx.cwd,
-    dir: optionValue5(ctx.parsed.options.dir),
-    genre: optionValue5(ctx.parsed.options.genre),
-    subGenre: optionValue5(ctx.parsed.options["sub-genre"]),
-    settingEra: optionValue5(ctx.parsed.options["setting-era"]),
-    pov: optionValue5(ctx.parsed.options.pov),
-    tense: optionValue5(ctx.parsed.options.tense),
-    synopsis: optionValue5(ctx.parsed.options.synopsis),
+    dir: optionValue6(ctx.parsed.options.dir),
+    genre: optionValue6(ctx.parsed.options.genre),
+    subGenre: optionValue6(ctx.parsed.options["sub-genre"]),
+    settingEra: optionValue6(ctx.parsed.options["setting-era"]),
+    pov: optionValue6(ctx.parsed.options.pov),
+    tense: optionValue6(ctx.parsed.options.tense),
+    synopsis: optionValue6(ctx.parsed.options.synopsis),
     dryRun: isTruthy(ctx.parsed.options["dry-run"])
   }));
 }
@@ -25258,8 +26252,8 @@ function importToolkitCommand(ctx) {
   return present(ctx, importMarkdown({
     source: ctx.parsed.positionals[1],
     cwd: ctx.cwd,
-    out: optionValue5(ctx.parsed.options.out),
-    title: optionValue5(ctx.parsed.options.title),
+    out: optionValue6(ctx.parsed.options.out),
+    title: optionValue6(ctx.parsed.options.title),
     dryRun: isTruthy(ctx.parsed.options["dry-run"])
   }));
 }
@@ -25389,7 +26383,7 @@ var COMMAND_LIST = [
       io.stdout.write(`Created story project: ${result.root}
 `);
       for (const linkedBook of result.linkedBooks) {
-        io.stdout.write(`Linked series backlink in ${path21.join(linkedBook, "story.md")}
+        io.stdout.write(`Linked series backlink in ${path22.join(linkedBook, "story.md")}
 `);
       }
       return 0;
@@ -26008,6 +27002,36 @@ var COMMAND_LIST = [
     ],
     examples: ["story issue dismiss issue_eye_colour --data dismissal.json"],
     run: dismissIssueCommand
+  },
+  {
+    name: "context",
+    path: ["context"],
+    usage: "context --task <task> [--scene <id> [--beat <id>] [--side before|after]]",
+    summary: ["Assemble a bounded, source-grounded context packet", "for one writing task"],
+    project: "discover",
+    mutates: false,
+    returnsResult: true,
+    strictOptions: true,
+    enforceArgs: true,
+    optionSchema: [
+      { name: "project" },
+      { name: "path" },
+      { name: "format", values: ["text", "json"] },
+      { name: "task", required: true, values: TASKS },
+      { name: "scene" },
+      { name: "beat" },
+      { name: "side", values: ["before", "after"] },
+      { name: "audience", values: ["writer", "reader"] },
+      { name: "constraint" },
+      { name: "include" },
+      { name: "max-bytes" }
+    ],
+    examples: [
+      "story context --task draft --scene scn_cellar --beat beat_confession",
+      "story context --task review --audience reader --scene scn_cellar --side after",
+      "story context --task plan --include arc_trust --max-bytes 20000"
+    ],
+    run: contextCommand
   }
 ];
 var COMMANDS = defineCommands(COMMAND_LIST);
@@ -26098,34 +27122,34 @@ function resolveRoot(cwd, parsed, name) {
   const command = commandFor(parsed, name);
   const projectFlag = lastOptionValue(parsed.options.project);
   const pathFlag = lastOptionValue(parsed.options.path);
-  if (projectFlag !== undefined && pathFlag !== undefined && path22.resolve(cwd, String(projectFlag)) !== path22.resolve(cwd, String(pathFlag))) {
+  if (projectFlag !== undefined && pathFlag !== undefined && path23.resolve(cwd, String(projectFlag)) !== path23.resolve(cwd, String(pathFlag))) {
     throw new Error(`Conflicting project paths: --project ${projectFlag} and --path ${pathFlag}. Use one of --project or --path.`);
   }
   const flagPath = projectFlag ?? pathFlag;
   const flagLabel = projectFlag !== undefined ? "--project" : "--path";
   if (command?.project === "discover") {
     if (flagPath !== undefined)
-      return path22.resolve(cwd, String(flagPath));
-    return discoverProject(cwd) ?? path22.resolve(cwd, ".");
+      return path23.resolve(cwd, String(flagPath));
+    return discoverProject(cwd) ?? path23.resolve(cwd, ".");
   }
   if (command?.project !== "positional") {
     if (flagPath !== undefined)
-      return path22.resolve(cwd, String(flagPath));
-    return path22.resolve(cwd, ".");
+      return path23.resolve(cwd, String(flagPath));
+    return path23.resolve(cwd, ".");
   }
   const positionalPath = command.path.length === 1 ? parsed.positionals[1] : undefined;
   if (positionalPath !== undefined && flagPath !== undefined) {
-    const resolvedPositional = path22.resolve(cwd, positionalPath);
-    const resolvedFlag = path22.resolve(cwd, String(flagPath));
+    const resolvedPositional = path23.resolve(cwd, positionalPath);
+    const resolvedFlag = path23.resolve(cwd, String(flagPath));
     if (resolvedPositional !== resolvedFlag) {
       throw new Error(`Conflicting project paths: ${positionalPath} and ${flagLabel} ${flagPath}. Use either a positional path or ${flagLabel}, not both.`);
     }
     return resolvedFlag;
   }
   if (flagPath !== undefined || positionalPath !== undefined) {
-    return path22.resolve(cwd, String(flagPath ?? positionalPath));
+    return path23.resolve(cwd, String(flagPath ?? positionalPath));
   }
-  return path22.resolve(cwd, ".");
+  return path23.resolve(cwd, ".");
 }
 function captureIo(cwd) {
   const out = [];

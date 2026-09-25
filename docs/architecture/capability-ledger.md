@@ -55,8 +55,8 @@ status|update|remove`, `context`, `entity …`, `check --only`, `snapshot`,
 `series link|check|timeline`, `assets`, `shots`, `publish check`) are specified
 by the design's command matrix; they are additions, not ledger dispositions.
 Task 3 registers `entity add|rename|remove|show`, Task 5 registers
-`fact add|list|retract`, and Task 6 registers `decision add|list|supersede`
-and `issue add|list|resolve|dismiss`.
+`fact add|list|retract`, Task 6 registers `decision add|list|supersede`
+and `issue add|list|resolve|dismiss`, and Task 7 registers `context`.
 The other names above are not registered and fail as unknown commands
 (`test/command-contract.test.js`).
 
@@ -177,11 +177,19 @@ answered from an older entry. A corrupt entry, or one with another cache or
 schema version, is a miss and is rewritten. A cache that cannot be written,
 including through a symlink that leaves the project, still returns the packet
 with a warning.
+`story context --task <task> [--scene <id> [--beat <id>] [--side
+before|after]] [--audience writer|reader] [--constraint <text>]...
+[--include <id>]... [--max-bytes <n>]` returns the packet and the cache
+status (`data: { packet, cache }`). The text form lists each item with its
+reason and sources, then impact material, omissions and diagnostics. An
+invalid request exits 2 and writes nothing. A missing target or include, or
+required material that cannot fit, exits 1 with its findings. A project with
+unreadable records exits 2, as `knowledge` does.
 
 ## 2. CLI options
 
 Baseline source of truth: `src/options.js` (68 registered options: 60 with
-help, 8 undocumented aliases, plus the Task 3 and Task 5 flags below). The new option set
+help, 8 undocumented aliases, plus the Task 3, 5, 6 and 7 flags below). The new option set
 is specified by the design (`--format text|json`, `--project`, `--dry-run`,
 structured `--data`); this section records where each baseline option's
 behavior lands. `--format text|json` selects the result envelope. Build kinds
@@ -203,7 +211,8 @@ them to `--kind`.
 | Mutation preview (new) | `--dry-run` | Added in Task 3 for fork init, import, and entity mutations; Task 5 adds `fact add` and `fact retract`; Task 6 adds decision and issue mutations | 3, 5, 6 | `test/project.test.js`, `test/state.test.js`, `test/memory.test.js` |
 | Removal policy (new) | `--policy refuse\|detach` | Added in Task 3 for `entity remove` | 3 | `test/rename-remove.test.js` |
 | Structured data (new) | `--data <json-file>` | Added in Task 5 for `fact add`; Task 6 adds `decision add`, `decision supersede`, `issue add`, `issue resolve`, and `issue dismiss` | 5, 6 | `test/state.test.js`, `test/memory.test.js` |
-| Story cursor (new) | `--scene <n\|id> --beat <id> --side before\|after` | Task 5 `fact list` and `knowledge` cursor. `--scene` still takes a scene number for schema v2 `add`; `--side` defaults to `before` | 5 | `test/state.test.js` |
+| Story cursor (new) | `--scene <n\|id> --beat <id> --side before\|after` | Task 5 `fact list` and `knowledge` cursor; Task 7 `context` target or reading boundary. `--scene` still takes a scene number for schema v2 `add`; `--side` defaults to `before` | 5, 7 | `test/state.test.js`, `test/context.test.js` |
+| Context request (new) | `--task --audience writer\|reader --constraint --include --max-bytes` | Added in Task 7 for `context`. `--constraint` and `--include` are repeatable; `--max-bytes` defaults to 48000 | 7 | `test/context.test.js` |
 | Inactive records (new) | `--include-inactive --include-work` | Added in Task 5 for `fact list`. Listing never makes an inactive or `work/` record apply at a cursor. Task 6 adds `--include-inactive` to `decision list` and `issue list` | 5, 6 | `test/state.test.js`, `test/memory.test.js` |
 | Record scope (new) | `--record <id>` | Added in Task 6 for `decision list` and `issue list` | 6 | `test/memory.test.js` |
 | Fork selector (new) | `--toolkit` | Added in Task 3. Selects story-toolkit `init` and `import` | 3 | `test/project.test.js`, `test/command-contract.test.js` |

@@ -161,7 +161,8 @@ class Selection {
       if (cut === whole.start) return null;
       if (cut !== whole.end) {
         bytes = whole.bytes.subarray(0, cut - whole.start);
-        source.until = until.beatId === undefined ? { side: until.side } : { beat: until.beatId, side: until.side };
+        // Only a beat cursor cuts inside a scene; entry and exit are handled above.
+        source.until = { beat: until.beatId, side: until.side };
       }
     }
     source.hash = sha256Hex(bytes);
@@ -370,6 +371,7 @@ class Selection {
   }
 
   outline(priority) {
+    if (this.chronology.readingOrder.length === 0) return;
     const content = this.chronology.readingOrder.map((scene) => {
       const record = this.project.records.get(scene.sceneId).record;
       const line = { sceneId: scene.sceneId, chapterId: scene.chapterId };
