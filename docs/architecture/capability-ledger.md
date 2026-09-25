@@ -167,6 +167,16 @@ that do not fit are listed in `omissions` with a retrieval id. When required
 material cannot fit, the packet carries no items, a `CONTEXT_BUDGET_EXCEEDED`
 error and the required source list. Linked plans, research and issues are found
 through the shared reference index; decisions apply by scope as in Task 6.
+`cachedContext` (`src/context/cache.js`) stores packets in
+`.story/cache/context/`. The key hashes the cache version, the schema
+version, the normalized query, and the content of every loaded record
+(selected or not), every project style source, and every non-record file a
+record cites. A record that is added, removed or edited therefore changes the
+key. So does an edited style file or cited file, and a changed file is never
+answered from an older entry. A corrupt entry, or one with another cache or
+schema version, is a miss and is rewritten. A cache that cannot be written,
+including through a symlink that leaves the project, still returns the packet
+with a warning.
 
 ## 2. CLI options
 
