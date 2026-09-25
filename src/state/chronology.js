@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { referencesInRecord } from "../project/references.js";
 import { findMarkers } from "../storage/spans.js";
 import { parseFrontmatter } from "../storage/document.js";
 import { normalizeCursor } from "./cursor.js";
@@ -134,14 +135,27 @@ export function buildChronology(project) {
       ));
       continue;
     }
+    // Edge targets are exactly the `after` references the shared index reads,
+    // so validate, removal and chronology agree on what an edge names.
+    const targets = afterReferences(entry.record);
+    if (targets.length < after.length) {
+      addDiagnostic(issue(
+        "MALFORMED_CHRONOLOGY",
+        "error",
+        `Scene ${entry.id} chronology.after has an entry that is not a scene id`,
+        [entry.id],
+        "declared",
+        "Set chronology.after to a list of scene ids."
+      ));
+    }
     const linked = new Set();
-    for (const target of after) {
-      if (typeof target !== "string" || target === "" || !sceneIds.has(target)) {
+    for (const target of targets) {
+      if (!sceneIds.has(target)) {
         addDiagnostic(issue(
           "MISSING_SCENE",
           "error",
-          `Scene ${entry.id} is after missing scene ${String(target)}`,
-          [entry.id, String(target)],
+          `Scene ${entry.id} is after missing scene ${target}`,
+          [entry.id, target],
           "declared",
           "Point chronology.after at a scene that exists, or remove the edge."
         ));
@@ -206,6 +220,12 @@ export function buildChronology(project) {
       return compareCursors(left, right, scenes, reach, contradicted, compOf, addDiagnostic);
     }
   };
+}
+
+function afterReferences(record) {
+  return referencesInRecord(record)
+    .filter((ref) => ref.field === "after")
+    .map((ref) => ref.id);
 }
 
 function compareChapters(left, right) {

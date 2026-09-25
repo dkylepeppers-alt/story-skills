@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
+import { referencesInRecord } from "../src/project/references.js";
 import { buildChronology } from "../src/state/chronology.js";
 import { appliesAt, beatCursor, normalizeCursor, sceneEntry, sceneExit } from "../src/state/cursor.js";
 import { makeChronologyFixture, makeProject, setRecordField } from "./support/project.js";
@@ -185,6 +186,28 @@ describe("partial chronology", () => {
     expect(codes(order)).toContain("MISSING_SCENE");
     expect(order.diagnostics.find((item) => item.code === "MISSING_SCENE").recordIds).toContain("scn_ghost");
     expect(order.compare(p.exit("scn_opening"), p.entry("scn_ghost"))).toBe("unordered");
+  });
+
+  test("after edges are the reference index's after references", async () => {
+    const p = await makeProject();
+    await p.addScene({ id: "scn_early", title: "Early" });
+    await p.addScene({ id: "scn_blank", title: "Blank", chronology: { after: ["", "scn_early"] } });
+    await p.addScene({ id: "scn_chapter", title: "Chapter", chronology: { after: ["chp_one"] } });
+    const project = await p.load();
+    const indexed = referencesInRecord(project.records.get("scn_blank").record)
+      .filter((ref) => ref.field === "after")
+      .map((ref) => ref.id);
+    expect(indexed).toEqual(["scn_early"]);
+    const order = buildChronology(project);
+    expect(order.storyOrder.constraints).toEqual([{ earlier: "scn_early", later: "scn_blank", reason: "after" }]);
+    // An entry the index cannot read as an id is malformed, not a missing scene.
+    const malformed = order.diagnostics.filter((item) => item.code === "MALFORMED_CHRONOLOGY");
+    expect(malformed.map((item) => item.recordIds)).toEqual([["scn_blank"]]);
+    // An id that exists but is not a scene resolves in the index and still
+    // cannot order scenes.
+    expect(project.diagnostics.filter((item) => item.code === "DANGLING_REFERENCE")).toEqual([]);
+    const missing = order.diagnostics.filter((item) => item.code === "MISSING_SCENE");
+    expect(missing.map((item) => item.recordIds)).toEqual([["scn_chapter", "chp_one"]]);
   });
 
   test("duplicate beat ids", async () => {
@@ -405,7 +428,10 @@ describe("partial chronology", () => {
     loaded.records.get("scn_mapping").record.chronology = ["not-a-mapping"];
     loaded.records.get("scn_bad_clock").record.chronology = { date: 20240101, time: null };
     const order = buildChronology(loaded);
-    expect(codes(order)).toEqual(expect.arrayContaining(["MALFORMED_TIMESTAMP", "MALFORMED_CHRONOLOGY", "MISSING_SCENE"]));
+    expect(codes(order)).toEqual(expect.arrayContaining(["MALFORMED_TIMESTAMP", "MALFORMED_CHRONOLOGY"]));
+    expect(order.diagnostics.filter((item) => item.code === "MALFORMED_CHRONOLOGY").map((item) => item.recordIds[0]).sort())
+      .toEqual(["scn_blank", "scn_numeric", "scn_typed"]);
+    expect(codes(order)).not.toContain("MISSING_SCENE");
     expect(order.scenes.find((scene) => scene.id === "scn_trimmed").timestamp.precision).toBe("instant");
     expect(order.scenes.find((scene) => scene.id === "scn_local_ok").timestamp).toMatchObject({ precision: "civil", day: "2024-03-02" });
     expect(order.scenes.find((scene) => scene.id === "scn_bad_instant").timestamp).toBeNull();

@@ -23058,10 +23058,14 @@ function buildChronology(project) {
       addDiagnostic(issue("MALFORMED_CHRONOLOGY", "error", `Scene ${entry.id} chronology.after must be a list of scene ids`, [entry.id], "declared", "Set chronology.after to a list of scene ids."));
       continue;
     }
+    const targets = afterReferences(entry.record);
+    if (targets.length < after.length) {
+      addDiagnostic(issue("MALFORMED_CHRONOLOGY", "error", `Scene ${entry.id} chronology.after has an entry that is not a scene id`, [entry.id], "declared", "Set chronology.after to a list of scene ids."));
+    }
     const linked = new Set;
-    for (const target of after) {
-      if (typeof target !== "string" || target === "" || !sceneIds.has(target)) {
-        addDiagnostic(issue("MISSING_SCENE", "error", `Scene ${entry.id} is after missing scene ${String(target)}`, [entry.id, String(target)], "declared", "Point chronology.after at a scene that exists, or remove the edge."));
+    for (const target of targets) {
+      if (!sceneIds.has(target)) {
+        addDiagnostic(issue("MISSING_SCENE", "error", `Scene ${entry.id} is after missing scene ${target}`, [entry.id, target], "declared", "Point chronology.after at a scene that exists, or remove the edge."));
         continue;
       }
       if (linked.has(target))
@@ -23112,6 +23116,9 @@ function buildChronology(project) {
       return compareCursors(left, right, scenes, reach, contradicted, compOf, addDiagnostic);
     }
   };
+}
+function afterReferences(record) {
+  return referencesInRecord(record).filter((ref) => ref.field === "after").map((ref) => ref.id);
 }
 function compareChapters2(left, right) {
   const leftNumber = typeof left.record.number === "number" ? left.record.number : Number.POSITIVE_INFINITY;
