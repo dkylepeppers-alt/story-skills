@@ -156,11 +156,24 @@ export class StorageError extends Error {
  */
 
 /**
+ * A comparison of the working project with a resolved baseline
+ * (src/changes/compare.js). Records and scenes match by stable id; add,
+ * remove, content change and move are classified independently, so a
+ * renamed file is a move and a scene moved with identical bytes is not a
+ * rewrite. `baseline` stores the resolution: a Git ref with the commit it
+ * named, or a snapshot with its manifest hash.
+ *
  * @typedef {object} ChangeReport
- * @property {{ id: string, path: string }[]} added
- * @property {{ id: string }[]} removed
- * @property {{ id: string, from: object, to: object }[]} changed
- * @property {{ id: string, from: string, to: string }[]} moved
+ * @property {{ kind: "git", ref: string, commit: string } | { kind: "snapshot", name: string, hash: string }} baseline
+ * @property {{ added: string[], removed: string[], changed: { path: string, from: string, to: string }[] }} files
+ * @property {{ id: string, type: string, path: string }[]} added
+ * @property {{ id: string, type: string, path: string }[]} removed
+ * @property {{ id: string, type: string, path: string, fields: string[], body: boolean }[]} changed
+ * @property {{ id: string, type: string, from: string, to: string }[]} moved
+ * @property {{ added: object[], removed: object[], changed: object[], moved: object[] }} scenes
+ * @property {{ added: string[], removed: string[], changed: { id: string, fields: string[], from: object, to: object }[] }} facts
+ * @property {{ recordId: string, field: string, ref: object, recorded: string|null, baseline: string|null, current: string|null, status: ("removed"|"changed") }[]} sources
+ * @property {{ ok: boolean, files: object[] } | null} scope
  * @property {Diagnostic[]} diagnostics
  */
 
@@ -187,10 +200,15 @@ export class StorageError extends Error {
  */
 
 /**
- * Exact allowed source ranges against a baseline hash (design §8).
+ * Exact allowed source ranges against a baseline hash (design §8,
+ * schemas/scope.schema.json). Ranges are half-open UTF-8 byte ranges of the
+ * baseline file; each owns both boundaries, so insertion at `start` or `end`
+ * is allowed and an empty range is one insertion point. A file without
+ * `ranges` may change freely; changed files the scope does not list are out
+ * of scope. Checked by checkScope / checkScopeSpec (src/changes/scope.js).
  *
  * @typedef {object} ScopeSpec
- * @property {{ path: string, baselineHash: string, ranges: { start: number, end: number }[] }[]} files
+ * @property {{ path: string, "baseline-hash": string, ranges?: { start: number, end: number }[], markers?: ("locked"|"editable"), restriction?: ("dialogue"|"dialogue-and-tags") }[]} files
  */
 
 // Shared function contracts. Owning module per function; implementations land
@@ -202,8 +220,9 @@ export class StorageError extends Error {
 // buildChronology(project);                  // Chronology with compare(a,b) — src/state/chronology.js
 // resolveState(project, cursor);             // { facts, conflicts, unresolved } — src/state/facts.js
 // buildContext(project, request);            // ContextPacket               — src/context/build.js
-// compareRevision(project, baseline, scope); // ChangeReport                — Task 8
-// analyzeImpact(project, change);            // ImpactReport                — Task 8
-// validateProposal(project, proposal);       // { ok, diagnostics, writes } — Task 8
-// applyProposal(root, proposal, options);    // Promise<MutationResult>     — Task 8
+// resolveBaseline(root, since);             // { baseline, files, current } — src/changes/baseline.js
+// compareRevision(project, baseline, { scope }); // ChangeReport          — src/changes/compare.js
+// analyzeImpact(project, change);            // ImpactReport                — Task 9
+// validateProposal(project, proposal);       // { ok, diagnostics, writes } — Task 9
+// applyProposal(root, proposal, options);    // Promise<MutationResult>     — Task 9
 // runChecks(project, options);               // Diagnostic[]                — Task 10

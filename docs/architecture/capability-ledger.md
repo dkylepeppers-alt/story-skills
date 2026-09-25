@@ -185,6 +185,30 @@ reason and sources, then impact material, omissions and diagnostics. An
 invalid request exits 2 and writes nothing. A missing target or include, or
 required material that cannot fit, exits 1 with its findings. A project with
 unreadable records exits 2, as `knowledge` does.
+Task 8 adds revision baselines and scope checks in `src/changes/`.
+`resolveBaseline` (`baseline.js`) reads a Git baseline with read-only Git
+plumbing (`rev-parse`, `ls-tree`, `cat-file`, `ls-files`), so the working
+tree, index and refs are untouched. The ref resolves to a commit, and the
+commit is stored in the result. A ref that names both a branch and a tag, or
+a short hash with several matches, is refused as `REF_AMBIGUOUS` with the full
+names to choose from. `createSnapshot` (`snapshot.js`) writes an explicit
+snapshot to `.story/revisions/<name>/`: a timestamp-free manifest of path,
+SHA-256 and size, plus byte-exact copies. The manifest hash names the
+snapshot, an existing name is refused, and reading verifies every hash
+(`SNAPSHOT_CORRUPT` otherwise). Nothing creates a snapshot implicitly.
+`git:<ref>` and `snapshot:<name>` are explicit; a bare name must match exactly
+one. `compareRevision` (`compare.js`) matches records and scenes by id. Add,
+remove, content change and move are separate classes, so a renamed file is a
+move and a scene moved to another chapter with identical span bytes is not a
+rewrite. It also reports changed facts by field, and source references whose
+evidence was removed (`SOURCE_REMOVED`, error) or changed since the baseline
+(`STALE_EVIDENCE`, warning), plus references left dangling by removals.
+`checkScope` / `checkScopeSpec` (`scope.js`) enforce a ScopeSpec: half-open
+UTF-8 byte ranges against a baseline hash, each owning both boundaries, with
+scene and beat markers locked unless declared editable. Violations are
+`EDIT_OUT_OF_SCOPE` errors with before/after byte spans; nothing is
+rewritten. `dialogueCandidates` offers quoted-content and tag-or-beat ranges
+as advice only; the caller's declared ranges decide.
 
 ## 2. CLI options
 
