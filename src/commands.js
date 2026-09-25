@@ -11,6 +11,7 @@ import {
   renameEntityCommand,
   showEntityCommand
 } from "./cli/handlers/entity.js";
+import { addFactCommand, listFactsCommand, retractFactCommand } from "./cli/handlers/fact.js";
 import { importToolkitCommand, initToolkitCommand } from "./cli/handlers/project.js";
 import { timelineCommand } from "./cli/handlers/timeline.js";
 import { defineCommands } from "./cli/registry.js";
@@ -472,6 +473,69 @@ const COMMAND_LIST = [
     ],
     examples: ["story entity show chr_ada"],
     run: showEntityCommand
+  },
+  {
+    name: "fact",
+    path: ["fact", "add"],
+    usage: "fact add --data <json-file>",
+    summary: ["Add a sourced fact from schema-validated data"],
+    project: "discover",
+    mutates: true,
+    returnsResult: true,
+    strictOptions: true,
+    enforceArgs: true,
+    optionSchema: [
+      { name: "project" },
+      { name: "path" },
+      { name: "format", values: ["text", "json"] },
+      { name: "dry-run" },
+      { name: "data", required: true }
+    ],
+    examples: ["story fact add --data fact.json"],
+    run: addFactCommand
+  },
+  {
+    name: "fact",
+    path: ["fact", "list"],
+    usage: "fact list",
+    summary: ["List established facts; --scene shows what applies"],
+    project: "discover",
+    mutates: false,
+    returnsResult: true,
+    strictOptions: true,
+    enforceArgs: true,
+    optionSchema: [
+      { name: "project" },
+      { name: "path" },
+      { name: "format", values: ["text", "json"] },
+      { name: "scene" },
+      { name: "beat" },
+      { name: "side", values: ["before", "after"] },
+      { name: "include-inactive" },
+      { name: "include-work" }
+    ],
+    examples: ["story fact list --scene scn_cellar --side after"],
+    run: listFactsCommand
+  },
+  {
+    name: "fact",
+    path: ["fact", "retract"],
+    usage: "fact retract <id>",
+    summary: ["Retract a proposed or established fact"],
+    project: "discover",
+    mutates: true,
+    returnsResult: true,
+    strictOptions: true,
+    enforceArgs: true,
+    args: [{ name: "id", required: true }],
+    optionSchema: [
+      { name: "project" },
+      { name: "path" },
+      { name: "format", values: ["text", "json"] },
+      { name: "dry-run" }
+    ],
+    examples: ["story fact retract fact_key_handoff"],
+    run: retractFactCommand
   }
 ];
 

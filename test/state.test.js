@@ -2,10 +2,12 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { runCli } from "../src/cli.js";
 import { loadProject } from "../src/project/load.js";
 import { resolveState } from "../src/state/facts.js";
 import { biographyFindings, knowledgeAt } from "../src/state/knowledge.js";
 import { PREDICATES, predicateFor, validateFact } from "../src/state/predicates.js";
+import { makeTempDir, memoryIo } from "./helpers.js";
 import { makeKnowledgeFixture, makeProject, setRecordField } from "./support/project.js";
 
 function codes(list) {
@@ -483,5 +485,276 @@ describe("unsplit biographies", () => {
     const known = knowledgeAt(project, "chr_zoe", p.exit("scn_cellar"));
     expect(codes(known.diagnostics)).toEqual(["UNSPLIT_BIOGRAPHY"]);
     expect(biographyFindings(project, ["chr_plain"])).toEqual([]);
+  });
+});
+
+function invoke(cwd, argv) {
+  const io = memoryIo(cwd);
+  const code = runCli(argv, io);
+  return { code, out: io.output(), err: io.error() };
+}
+
+function json(cwd, argv) {
+  const result = invoke(cwd, [...argv, "--format", "json"]);
+  expect(result.out.includes("\n")).toBe(false);
+  return { ...result, parsed: JSON.parse(result.out) };
+}
+
+function writeData(p, name, data) {
+  const file = path.join(p.root, "..", `${path.basename(p.root)}-${name}.json`);
+  fs.writeFileSync(file, typeof data === "string" ? data : JSON.stringify(data));
+  return file;
+}
+
+function files(root) {
+  const found = {};
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name === ".story") continue;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else found[path.relative(root, full)] = fs.readFileSync(full, "utf8");
+    }
+  };
+  walk(root);
+  return found;
+}
+
+describe("fact add", () => {
+  test("adds a schema-validated fact and hashes the named source span", async () => {
+    const p = await makeKnowledgeFixture();
+    const data = writeData(p, "zoe-location", {
+      id: "fact_zoe_cellar",
+      status: "established",
+      kind: "world",
+      subject: "chr_zoe",
+      predicate: "location",
+      value: "the cellar",
+      "valid-from": { scene: "scn_cellar", side: "before" },
+      sources: [{ path: "chapters/one.md", scene: "scn_cellar", beat: "beat_handoff", kind: "manuscript" }]
+    });
+    const result = json(p.root, ["fact", "add", "--data", data]);
+    expect(result.code).toBe(0);
+    expect(result.parsed.ok).toBe(true);
+    expect(result.parsed.command).toBe("fact add");
+    expect(result.parsed.data).toMatchObject({ id: "fact_zoe_cellar", path: "facts/fact_zoe_cellar.md", dryRun: false });
+    expect(result.parsed.writes).toEqual([{ path: "facts/fact_zoe_cellar.md", action: "create", expectedHash: null }]);
+    const project = await p.load();
+    expect(project.diagnostics).toEqual([]);
+    const stored = project.records.get("fact_zoe_cellar").record;
+    expect(stored.sources[0].hash).toBe(p.source("scn_cellar", "beat_handoff").hash);
+    expect(stored.format).toBe("story-toolkit");
+    expect(resolveState(project, p.exit("scn_cellar")).facts.map((f) => f.id)).toContain("fact_zoe_cellar");
+  });
+
+  test("allocates an id, previews with --dry-run, and warns when an established fact has no sources", async () => {
+    const p = await makeKnowledgeFixture();
+    const before = files(p.root);
+    const data = writeData(p, "unsourced", { status: "established", kind: "world", subject: "chr_ada", predicate: "status", value: "alive" });
+    const preview = json(p.root, ["fact", "add", "--data", data, "--dry-run"]);
+    expect(preview.code).toBe(0);
+    expect(preview.parsed.data.dryRun).toBe(true);
+    expect(preview.parsed.data.id).toMatch(/^fact_[0-9a-f]{8}$/);
+    expect(preview.parsed.diagnostics.map((item) => [item.code, item.severity])).toEqual([["MISSING_PROVENANCE", "warning"]]);
+    expect(files(p.root)).toEqual(before);
+    const added = invoke(p.root, ["fact", "add", "--data", data]);
+    expect(added.code).toBe(0);
+    expect(added.out).toMatch(/^Added fact fact_[0-9a-f]{8}: facts\/fact_[0-9a-f]{8}\.md\n$/);
+  });
+
+  test("an unreadable, malformed or schema-invalid --data file is an invalid invocation", async () => {
+    const p = await makeKnowledgeFixture();
+    const before = files(p.root);
+    const cases = [
+      path.join(p.root, "..", "missing-data.json"),
+      writeData(p, "broken", "{ not json"),
+      writeData(p, "array", "[]"),
+      writeData(p, "rumor", { status: "established", kind: "rumor", subject: "chr_ada", predicate: "status", value: "alive" }),
+      writeData(p, "retracted", { status: "retracted", kind: "world", subject: "chr_ada", predicate: "status", value: "alive" }),
+      writeData(p, "decision", { type: "decision", status: "established", kind: "world", subject: "chr_ada", predicate: "status", value: "alive" }),
+      writeData(p, "bad-id", { id: "Fact Bad", status: "established", kind: "world", subject: "chr_ada", predicate: "status", value: "alive" })
+    ];
+    for (const data of cases) {
+      const result = json(p.root, ["fact", "add", "--data", data]);
+      expect(result.code).toBe(2);
+      expect(result.parsed.ok).toBe(false);
+      expect(result.parsed.writes).toEqual([]);
+    }
+    expect(invoke(p.root, ["fact", "add"]).code).toBe(2);
+    expect(files(p.root)).toEqual(before);
+  });
+
+  test("a duplicate id, a catalog violation, a dangling reference or unreadable evidence writes nothing and exits 1", async () => {
+    const p = await makeKnowledgeFixture();
+    const before = files(p.root);
+    const base = { status: "established", kind: "world", subject: "obj_brass_key", predicate: "holder", value: "chr_ada" };
+    const cases = [
+      [{ ...base, id: "fact_key_handoff" }, "DUPLICATE_RECORD_ID"],
+      [{ ...base, subject: "chr_ada" }, "FACT_SUBJECT_INVALID"],
+      [{ ...base, "valid-from": { scene: "scn_ghost", side: "after" } }, "DANGLING_REFERENCE"],
+      [{ ...base, sources: [{ path: "chapters/one.md", scene: "scn_ghost", kind: "manuscript" }] }, "SOURCE_UNREADABLE"]
+    ];
+    for (const [data, code] of cases) {
+      const result = json(p.root, ["fact", "add", "--data", writeData(p, code, data)]);
+      expect(result.code).toBe(1);
+      expect(result.parsed.diagnostics.map((item) => item.code)).toContain(code);
+      expect(result.parsed.writes).toEqual([]);
+    }
+    expect(files(p.root)).toEqual(before);
+  });
+
+  test("a supplied source hash that no longer matches the evidence is stale", async () => {
+    const p = await makeKnowledgeFixture();
+    const data = writeData(p, "stale", {
+      status: "established",
+      kind: "world",
+      subject: "obj_brass_key",
+      predicate: "holder",
+      value: "chr_ada",
+      sources: [{ path: "chapters/one.md", scene: "scn_cellar", hash: "0".repeat(64), kind: "manuscript" }]
+    });
+    const result = json(p.root, ["fact", "add", "--data", data]);
+    expect(result.code).toBe(3);
+    expect(result.parsed.diagnostics[0].code).toBe("STALE_SOURCE");
+  });
+
+  test("a missing project fails the same way in text and JSON", async () => {
+    const cwd = makeTempDir();
+    const data = path.join(cwd, "data.json");
+    fs.writeFileSync(data, "{}");
+    const text = invoke(cwd, ["fact", "add", "--data", data]);
+    const result = json(cwd, ["fact", "add", "--data", data]);
+    expect(text.code).toBe(2);
+    expect(result.code).toBe(2);
+    expect(result.parsed.diagnostics[0].code).toBe("PROJECT_NOT_FOUND");
+  });
+});
+
+describe("fact list", () => {
+  async function listProject() {
+    const p = await makeKnowledgeFixture();
+    await p.addFact({ id: "fact_old", status: "superseded", subject: "chr_zoe", predicate: "status", value: "alive", sources: [p.source("scn_cellar")] });
+    await p.addFact({ id: "fact_idea", status: "proposed", subject: "chr_zoe", predicate: "status", value: "missing", sources: [p.source("scn_cellar")] });
+    p.write("work/facts/fact_draft.md", p.read("facts/fact_idea.md").replace("id: fact_idea", "id: fact_draft"));
+    p.write("work/notes.md", "No frontmatter here.\n");
+    p.write("work/story-note.md", "---\ntitle: A note\n---\nNot a fact.\n");
+    return p;
+  }
+
+  test("lists established facts, and inactive or work/ records only when asked", async () => {
+    const p = await listProject();
+    const plain = json(p.root, ["fact", "list"]);
+    expect(plain.code).toBe(0);
+    expect(plain.parsed.data.facts.map((f) => f.id)).toEqual(["fact_ada_learns", "fact_false_belief", "fact_key_handoff"]);
+    const all = json(p.root, ["fact", "list", "--include-inactive", "--include-work"]);
+    expect(all.parsed.data.facts.map((f) => [f.id, f.status, f.active, f.location])).toEqual([
+      ["fact_ada_learns", "established", true, "facts"],
+      ["fact_false_belief", "established", true, "facts"],
+      ["fact_idea", "proposed", false, "facts"],
+      ["fact_key_handoff", "established", true, "facts"],
+      ["fact_old", "superseded", false, "facts"],
+      ["fact_draft", "proposed", false, "work"]
+    ]);
+    const text = invoke(p.root, ["fact", "list", "--include-inactive"]);
+    expect(text.out).toContain("- fact_old [superseded world] chr_zoe status alive (inactive)\n");
+    expect(text.out).toContain("- fact_key_handoff [established world] obj_brass_key holder chr_zoe\n");
+    const empty = await makeProject();
+    expect(invoke(empty.root, ["fact", "list"]).out).toBe("Facts:\n- None\n");
+    expect(invoke(empty.root, ["fact", "list", "--include-work"]).out).toBe("Facts:\n- None\n");
+  });
+
+  test("at a scene cursor, applicability is explicit and inactive records are not revived", async () => {
+    const p = await listProject();
+    const at = json(p.root, ["fact", "list", "--scene", "scn_cellar", "--beat", "beat_confession", "--side", "before", "--include-inactive", "--include-work"]);
+    expect(at.code).toBe(0);
+    expect(at.parsed.data.cursor).toEqual({ sceneId: "scn_cellar", beatId: "beat_confession", side: "before" });
+    expect(at.parsed.data.facts.map((f) => [f.id, f.applies])).toEqual([
+      ["fact_ada_learns", false],
+      ["fact_false_belief", true],
+      ["fact_idea", false],
+      ["fact_key_handoff", true],
+      ["fact_old", false],
+      ["fact_draft", false]
+    ]);
+    const entry = invoke(p.root, ["fact", "list", "--scene", "scn_cellar"]);
+    expect(entry.out).toContain("Facts at scn_cellar (before):\n");
+    expect(entry.out).toContain("- fact_key_handoff [established world] obj_brass_key holder chr_zoe (applies: no)\n");
+    const exit = invoke(p.root, ["fact", "list", "--scene", "scn_cellar", "--side", "after"]);
+    expect(exit.out).toContain("(applies: yes)");
+  });
+
+  test("unresolved facts and conflicts at a cursor are reported", async () => {
+    const p = await listProject();
+    await p.addFact({ id: "fact_ada_holds", subject: "obj_brass_key", predicate: "holder", value: "chr_ada", "valid-from": { scene: "scn_cellar", beat: "beat_handoff", side: "after" }, sources: [p.source("scn_cellar")] });
+    await p.addFact({ id: "fact_unsourced", subject: "chr_ada", predicate: "status", value: "alive" });
+    const result = json(p.root, ["fact", "list", "--scene", "scn_cellar", "--side", "after"]);
+    expect(result.code).toBe(1);
+    expect(result.parsed.data.conflicts.map((item) => item.factIds)).toEqual([["fact_ada_holds", "fact_key_handoff"]]);
+    expect(result.parsed.data.facts.find((f) => f.id === "fact_unsourced")).toMatchObject({ applies: "unresolved", reason: "MISSING_PROVENANCE" });
+    const text = invoke(p.root, ["fact", "list", "--scene", "scn_cellar", "--side", "after"]);
+    expect(text.code).toBe(1);
+    expect(text.err).toContain("(applies: unresolved, MISSING_PROVENANCE)");
+    expect(text.err).toContain("Conflicts:\n- obj_brass_key holder: chr_ada, chr_zoe (fact_ada_holds, fact_key_handoff)\n");
+    expect(text.err).toContain("warning MISSING_PROVENANCE");
+  });
+
+  test("--beat or --side without --scene is an invalid invocation", async () => {
+    const p = await listProject();
+    expect(json(p.root, ["fact", "list", "--beat", "beat_confession"]).code).toBe(2);
+    expect(json(p.root, ["fact", "list", "--side", "after"]).code).toBe(2);
+    expect(invoke(p.root, ["fact", "list", "--side", "sideways", "--scene", "scn_cellar"]).code).toBe(2);
+  });
+});
+
+describe("fact retract", () => {
+  test("retracts an established fact through a hash-checked replacement", async () => {
+    const p = await makeKnowledgeFixture();
+    const original = p.read("facts/fact_key_handoff.md");
+    const preview = json(p.root, ["fact", "retract", "fact_key_handoff", "--dry-run"]);
+    expect(preview.code).toBe(0);
+    expect(preview.parsed.writes).toEqual([{ path: "facts/fact_key_handoff.md", action: "replace", expectedHash: p.hash("facts/fact_key_handoff.md") }]);
+    expect(p.read("facts/fact_key_handoff.md")).toBe(original);
+    const done = invoke(p.root, ["fact", "retract", "fact_key_handoff"]);
+    expect(done.code).toBe(0);
+    expect(done.out).toBe("Retracted fact fact_key_handoff: facts/fact_key_handoff.md\n");
+    expect(p.read("facts/fact_key_handoff.md")).toBe(original.replace("status: established", "status: retracted"));
+    const project = await p.load();
+    expect(resolveState(project, p.exit("scn_cellar")).facts.map((f) => f.id)).not.toContain("fact_key_handoff");
+  });
+
+  test("a retracted fact cannot be retracted again and an unknown id is not a fact", async () => {
+    const p = await makeKnowledgeFixture();
+    expect(invoke(p.root, ["fact", "retract", "fact_key_handoff"]).code).toBe(0);
+    const again = json(p.root, ["fact", "retract", "fact_key_handoff"]);
+    expect(again.code).toBe(1);
+    expect(again.parsed.diagnostics[0].code).toBe("FACT_TRANSITION_INVALID");
+    for (const id of ["fact_nobody", "chr_ada"]) {
+      const missing = json(p.root, ["fact", "retract", id]);
+      expect(missing.code).toBe(1);
+      expect(missing.parsed.diagnostics[0].code).toBe("FACT_NOT_FOUND");
+    }
+    expect(invoke(p.root, ["fact", "retract"]).code).toBe(2);
+  });
+
+  test("a blocking load error stops fact mutations before any write", async () => {
+    const p = await makeKnowledgeFixture();
+    p.write("facts/broken.md", "---\nformat: story-toolkit\nschema-version: 1\nid: fact_broken\ntype: fact\n---\n");
+    const before = files(p.root);
+    expect(json(p.root, ["fact", "retract", "fact_key_handoff"]).code).toBe(2);
+    const data = writeData(p, "blocked", { status: "established", kind: "world", subject: "chr_ada", predicate: "status", value: "alive" });
+    expect(json(p.root, ["fact", "add", "--data", data]).code).toBe(2);
+    expect(files(p.root)).toEqual(before);
+  });
+
+  test("a held project lock stops fact mutations with the stale exit code", async () => {
+    const p = await makeKnowledgeFixture();
+    p.write(".story/lock", "{}\n");
+    const before = files(p.root);
+    const retract = json(p.root, ["fact", "retract", "fact_key_handoff"]);
+    expect([retract.code, retract.parsed.diagnostics[0].code]).toEqual([3, "LOCKED"]);
+    const data = writeData(p, "locked", { status: "established", kind: "world", subject: "chr_ada", predicate: "status", value: "alive", sources: [p.source("scn_cellar")] });
+    const add = json(p.root, ["fact", "add", "--data", data]);
+    expect([add.code, add.parsed.diagnostics[0].code]).toEqual([3, "LOCKED"]);
+    expect(files(p.root)).toEqual(before);
   });
 });

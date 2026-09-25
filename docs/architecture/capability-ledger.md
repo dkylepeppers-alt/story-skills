@@ -54,8 +54,9 @@ status|update|remove`, `context`, `entity …`, `check --only`, `snapshot`,
 `changes`, `impact`, `reconcile`, `repair`, `decision|issue|fact add|list|…`,
 `series link|check|timeline`, `assets`, `shots`, `publish check`) are specified
 by the design's command matrix; they are additions, not ledger dispositions.
-Task 3 registers only `entity add|rename|remove|show`. The other names above
-are not registered and fail as unknown commands (`test/command-contract.test.js`).
+Task 3 registers `entity add|rename|remove|show` and Task 5 registers
+`fact add|list|retract`. The other names above are not registered and fail as
+unknown commands (`test/command-contract.test.js`).
 
 Task 3 adds the `format: story-toolkit` layer beside schema v2. Default
 `init`, `import`, `add`, `rename`, and `remove` still scaffold and edit schema
@@ -86,10 +87,22 @@ character presence from `src/timeline.js`. Custody and clock checks in
 cursor's scene span, the same boundary chronology uses, so `loadProject`
 reports `DANGLING_REFERENCE` for a beat declared only in another scene.
 
+Task 5 adds sourced facts. `fact add --data <json-file>` validates the record
+against the fact schema and the predicate catalog in `src/state/predicates.js`,
+checks references through the shared index, and hashes each named source span.
+A supplied hash that no longer matches its evidence is `STALE_SOURCE` (exit 3).
+`fact retract <id>` is a hash-checked status replacement. `fact list` shows
+established facts; `--include-inactive` adds proposed, retracted, and
+superseded records and `--include-work` adds `work/` records. With `--scene`
+(and optional `--beat` and `--side before|after`), each listed fact reports
+whether it applies at that cursor. Inactive and `work/` records never apply.
+Facts without provenance, with stale or unreadable evidence, or with an
+unordered start are returned as unresolved rather than applied.
+
 ## 2. CLI options
 
 Baseline source of truth: `src/options.js` (68 registered options: 60 with
-help, 8 undocumented aliases, plus the Task 3 flags below). The new option set
+help, 8 undocumented aliases, plus the Task 3 and Task 5 flags below). The new option set
 is specified by the design (`--format text|json`, `--project`, `--dry-run`,
 structured `--data`); this section records where each baseline option's
 behavior lands. `--format text|json` selects the result envelope. Build kinds
@@ -108,8 +121,11 @@ them to `--kind`.
 | Undocumented aliases | `--locations --characters --mentions --members --arcs --aliases --act --sources` | Intentionally removed once schema v2 `add` is replaced (undocumented convenience aliases; behavior replaced by repeatable documented forms and `--data`). Task 3 still accepts them because v2 `add` and `test/cli.test.js` use them | 3 | `test/cli.test.js` |
 | Global (new) | `--help/-h --version/-v` | Retained. `--help` and `--version` stay plain text even when `--format json` is present | 3 | `test/registry.test.js`, `test/command-contract.test.js` |
 | Result envelope (new) | `--format text\|json` | Stdout is one JSON result object when the value is `json`; logs stay on stderr. `text` is the plain result | 3 | `test/command-contract.test.js` |
-| Mutation preview (new) | `--dry-run` | Added in Task 3 for fork init, import, and entity mutations | 3 | `test/project.test.js` |
+| Mutation preview (new) | `--dry-run` | Added in Task 3 for fork init, import, and entity mutations; Task 5 adds `fact add` and `fact retract` | 3, 5 | `test/project.test.js`, `test/state.test.js` |
 | Removal policy (new) | `--policy refuse\|detach` | Added in Task 3 for `entity remove` | 3 | `test/rename-remove.test.js` |
+| Structured data (new) | `--data <json-file>` | Added in Task 5 for `fact add` | 5 | `test/state.test.js` |
+| Story cursor (new) | `--scene <n\|id> --beat <id> --side before\|after` | Task 5 `fact list` cursor. `--scene` still takes a scene number for schema v2 `add`; `--side` defaults to `before` | 5 | `test/state.test.js` |
+| Inactive records (new) | `--include-inactive --include-work` | Added in Task 5 for `fact list`. Listing never makes an inactive or `work/` record apply at a cursor | 5 | `test/state.test.js` |
 | Fork selector (new) | `--toolkit` | Added in Task 3. Selects story-toolkit `init` and `import` | 3 | `test/project.test.js`, `test/command-contract.test.js` |
 
 ## 3. Skills

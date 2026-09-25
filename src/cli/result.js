@@ -18,6 +18,9 @@ const ACTIONS = {
   REFERENCE_PRESENT: "Use --policy detach for optional structural references, or reconcile required references first.",
   STALE_SOURCE: "Reload the project and retry the command.",
   PROJECT_FORMAT: "This command reads format story-toolkit projects. Schema v2 projects stay on the existing commands.",
+  FACT_NOT_FOUND: "Check the id with story fact list --include-inactive.",
+  FACT_TRANSITION_INVALID: "Only proposed or established facts can be retracted.",
+  SOURCE_UNREADABLE: "Point the source at a file, scene, and beat that exist.",
   COMMAND_FAILED: "Fix the reported error and run the command again."
 };
 
