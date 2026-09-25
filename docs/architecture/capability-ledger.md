@@ -57,8 +57,8 @@ by the design's command matrix; they are additions, not ledger dispositions.
 
 ## 2. CLI options
 
-Baseline source of truth: `src/options.js` (57 registered options, including
-undocumented plural aliases). The new option set is specified by the design
+Baseline source of truth: `src/options.js` (68 registered options: 60 with
+help, 8 undocumented aliases). The new option set is specified by the design
 (`--format text|json`, `--project`, `--dry-run`, structured `--data`); this
 section records where each baseline option's behavior lands.
 
@@ -70,8 +70,8 @@ section records where each baseline option's behavior lands.
 | Comparison | `--ref --against` | Adapted (git refs retained; `--against` removed, see §7) | 8 | `test/compare.test.js`, `test/changes.test.js` |
 | Output | `--out --format --shunn --pages --actionable` | Adapted (`--format` splits into `--format text\|json` and `--kind` for builds) | 10, 12 | `test/publishing.test.js`, `test/command-contract.test.js` |
 | Knowledge | `--at` | Adapted (chapter id → scene/beat cursor) | 5 | `test/knowledge.test.js` |
-| Entity fields | `--number --chapter --scene --type --role --status --mode --date --time --travel-hours --dilemma --sequel --location(s) --character(s) --mention(s) --member(s) --owner --arc(s) --introduced --resolved --planted --payoff --significance-delayed --category --alias(es) --region --population --controlled-by --prevalence --act(s) --placement --order --source(s) --used-in` | Adapted (schema-validated `--data <json-file>` mutations become the primary contract; per-design §9) | 3, 5, 6, 13 | `test/project.test.js`, `test/state.test.js`, `test/memory.test.js`, `test/assets.test.js` |
-| Hidden plural aliases | `--themes --locations --characters --mentions --members --arcs --aliases --acts --sources` | Intentionally removed (undocumented convenience aliases; behavior replaced by repeatable documented forms and `--data`) | 3 | `test/command-contract.test.js` |
+| Entity fields | `--number --chapter --scene --type --role --status --mode --date --time --travel-hours --dilemma --sequel --location(s) --character(s) --mention(s) --member(s) --owner --arc(s) --introduced --resolved --planted --payoff --significance-delayed --category --alias(es) --region --population --controlled-by --prevalence --acts --placement --order --source(s) --used-in` | Adapted (schema-validated `--data <json-file>` mutations become the primary contract; per-design §9) | 3, 5, 6, 13 | `test/project.test.js`, `test/state.test.js`, `test/memory.test.js`, `test/assets.test.js` |
+| Undocumented aliases | `--locations --characters --mentions --members --arcs --aliases --act --sources` | Intentionally removed (undocumented convenience aliases; behavior replaced by repeatable documented forms and `--data`) | 3 | `test/command-contract.test.js` |
 | Global (new) | `--help/-h --version/-v` | Retained | 3 | `test/registry.test.js` |
 
 ## 3. Skills
@@ -179,7 +179,7 @@ is superseded or intentionally removed.
 |---|---|---|
 | Copied fallback binary `skills/story-maintenance/scripts/story.js` (+ `build:fallback`, `check:fallback`, `check:node-help`) | Shipping a second executable inside a skill duplicates the CLI and drifts from the package; the toolkit ships one CLI | Packaged CLI (`dist/story.js` + `bin/story.js` entrypoint) installed from the fork release; Task 17 tests: `test/skill-build.test.js`, `test/package-smoke.test.js` |
 | Marketplace plugin distribution (`.claude-plugin/`, `.codex-plugin/`, `.agents/` as install channels; `plugins/story-skills` symlink) | One owned distribution replaces multi-marketplace installs | `story setup` / release tarball installation (Tasks 17–19); identity fields remain aligned in the interim (`test/identity.test.js`) |
-| Hidden plural option aliases (`--characters`, `--locations`, `--mentions`, `--members`, `--aliases`, `--themes`, `--arcs`, `--acts`, `--sources`) | Undocumented convenience aliases; the new contract prefers documented repeatable forms and schema-validated `--data` | Documented repeatable options and `--data <json-file>` mutations (Task 3 onward); `test/command-contract.test.js` |
+| Hidden undocumented option aliases (`--characters`, `--locations`, `--mentions`, `--members`, `--aliases`, `--arcs`, `--act`, `--sources`) | Undocumented convenience aliases; the new contract prefers documented repeatable forms and schema-validated `--data` | Documented repeatable options and `--data <json-file>` mutations (Task 3 onward); `test/command-contract.test.js` |
 | `compare --against <folder>` baseline | Copied-project-folder baselines are not immutable; snapshots are explicit and hashed | `story snapshot` + `.story/revisions/` baselines (Task 8); `test/changes.test.js` |
 | `build --format shunn` + separate `--shunn` flag | Overloaded option; kind is one concept | `build --kind shunn-md\|shunn-docx` (Task 12); `test/shunn.test.js`, `test/shunn-docx.test.js` |
 | `story-maintenance` as a standalone skill | Its deterministic checks are CLI capabilities, not a creative skill | `story-workflow` routes to the CLI; all checks retained (Task 10); `test/diagnostics.test.js` |
