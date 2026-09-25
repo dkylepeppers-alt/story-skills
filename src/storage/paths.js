@@ -38,7 +38,16 @@ export function assertWritableTarget(root, absPath) {
     }
     probe = parent;
   }
-  const real = fs.realpathSync(probe);
+  let real;
+  try {
+    real = fs.realpathSync(probe);
+  } catch (error) {
+    throw new StorageError(
+      "ACCESS_DENIED",
+      `${error.code ?? "UNKNOWN"} while resolving the write target ${path.relative(root, absPath)}: ${error.message}. Check file and directory permissions.`,
+      { fsCode: error.code, target: path.relative(root, absPath) }
+    );
+  }
   if (real !== rootReal && !real.startsWith(rootReal + path.sep)) {
     throw new StorageError(
       "SYMLINK_ESCAPE",

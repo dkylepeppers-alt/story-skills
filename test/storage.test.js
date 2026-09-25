@@ -194,6 +194,38 @@ describe("source-preserving storage", () => {
       { path: "facts/nested/deep.md", action: "create", expectedHash: null, content: "x" }
     ], {})).rejects.toMatchObject({ code: "MISSING_PATH" });
   });
+
+  test("permission failures surface as coded storage diagnostics, not raw fs errors", async () => {
+    if (typeof process.getuid === "function" && process.getuid() === 0) {
+      return; // permission bits do not bind root, so the EACCES paths cannot be exercised
+    }
+    const p = await makeProject();
+    const target = path.join(p.root, "chapters", "one.md");
+    const originalHash = p.hash("chapters/one.md");
+    fs.chmodSync(target, 0o000);
+    try {
+      await expect(writeTransaction(p.root, [
+        { path: "chapters/one.md", action: "replace", expectedHash: originalHash, content: "x" }
+      ], {})).rejects.toMatchObject({ code: "ACCESS_DENIED", details: { fsCode: "EACCES" } });
+      await expect(writeTransaction(p.root, [
+        { path: "chapters/one.md", action: "replace", expectedHash: originalHash, content: "x" }
+      ], { dryRun: true })).rejects.toMatchObject({ code: "ACCESS_DENIED" });
+    } finally {
+      fs.chmodSync(target, 0o644);
+    }
+
+    const writable = p.hash("chapters/one.md");
+    const chapterDir = path.join(p.root, "chapters");
+    fs.chmodSync(chapterDir, 0o555);
+    try {
+      await expect(writeTransaction(p.root, [
+        { path: "chapters/one.md", action: "replace", expectedHash: writable, content: "x" }
+      ], {})).rejects.toMatchObject({ code: "ACCESS_DENIED", details: { fsCode: "EACCES" } });
+    } finally {
+      fs.chmodSync(chapterDir, 0o755);
+    }
+    expect(p.read("chapters/one.md")).toBe(p.initial("chapters/one.md"));
+  });
 });
 
 describe("frontmatter document parsing", () => {

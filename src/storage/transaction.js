@@ -87,7 +87,13 @@ export async function writeTransaction(root, writes, options = {}) {
       throw new StorageError("OPERATION_FAILED", `Transaction ${transactionId} failed: ${error.message}`);
     }
 
-    fs.rmSync(transactionDir, { recursive: true, force: true });
+    try {
+      fs.rmSync(transactionDir, { recursive: true, force: true });
+    } catch (error) {
+      // The write set applied; a failed preimage cleanup is recoverable through
+      // the journal, so surface it as a diagnostic rather than a raw error.
+      throw toStorageIoError(error, transactionDir, "cleaning preimages in");
+    }
     return {
       ok: true,
       diagnostics: lock.diagnostics,
@@ -98,6 +104,23 @@ export async function writeTransaction(root, writes, options = {}) {
   } finally {
     releaseLock(lock);
   }
+}
+
+// Filesystem permission and IO failures are converted to StorageError
+// diagnostics so callers matching on `code` always see a stable shape. The
+// operating system's error code stays visible in the message and in
+// `details.fsCode`; EACCES/EPERM get the actionable ACCESS_DENIED code.
+function toStorageIoError(error, targetPath, operation) {
+  if (error instanceof StorageError) {
+    return error;
+  }
+  const fsCode = typeof error.code === "string" ? error.code : "UNKNOWN";
+  const code = fsCode === "EACCES" || fsCode === "EPERM" ? "ACCESS_DENIED" : "OPERATION_FAILED";
+  return new StorageError(
+    code,
+    `${fsCode} while ${operation} ${targetPath}: ${error.message}. Check file and directory permissions.`,
+    { fsCode, target: targetPath, operation }
+  );
 }
 
 function normalizeWrite(write) {
@@ -143,7 +166,20 @@ function validatePrecondition(write, { baseline = false } = {}) {
       );
     }
     const parent = path.dirname(write.target);
-    if (!fs.existsSync(parent)) {
+    let parentStat;
+    try {
+      parentStat = fs.statSync(parent);
+    } catch (error) {
+      if (error.code === "ENOENT") {
+        throw new StorageError(
+          "MISSING_PATH",
+          `Create target directory is missing: ${path.dirname(write.path)}`,
+          { directory: parent }
+        );
+      }
+      throw toStorageIoError(error, write.path, "checking the create target directory");
+    }
+    if (!parentStat.isDirectory()) {
       throw new StorageError(
         "MISSING_PATH",
         `Create target directory is missing: ${path.dirname(write.path)}`,
@@ -156,10 +192,24 @@ function validatePrecondition(write, { baseline = false } = {}) {
     return;
   }
 
-  if (!fs.existsSync(write.target) || !fs.statSync(write.target).isFile()) {
+  let stat;
+  try {
+    stat = fs.statSync(write.target);
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      throw new StorageError("MISSING_FILE", `Target file is missing: ${write.path}`);
+    }
+    throw toStorageIoError(error, write.path, `validating the ${write.action} target`);
+  }
+  if (!stat.isFile()) {
     throw new StorageError("MISSING_FILE", `Target file is missing: ${write.path}`);
   }
-  const current = sha256Hex(fs.readFileSync(write.target));
+  let current;
+  try {
+    current = sha256Hex(fs.readFileSync(write.target));
+  } catch (error) {
+    throw toStorageIoError(error, write.path, `reading the ${write.action} target`);
+  }
   if (baseline) {
     if (current !== write.expectedHash) {
       throw new StorageError(
@@ -226,34 +276,53 @@ function releaseLock(lock) {
 }
 
 function stageTransaction(root, transactionDir, transactionId, plan) {
-  fs.mkdirSync(transactionDir, { recursive: true });
-  fs.mkdirSync(path.join(transactionDir, "preimages"), { recursive: true });
-  fs.mkdirSync(path.join(transactionDir, "contents"), { recursive: true });
+  try {
+    fs.mkdirSync(transactionDir, { recursive: true });
+    fs.mkdirSync(path.join(transactionDir, "preimages"), { recursive: true });
+    fs.mkdirSync(path.join(transactionDir, "contents"), { recursive: true });
 
-  const journal = { id: transactionId, createdAt: new Date().toISOString(), root, writes: [] };
-  for (const [index, write] of plan.entries()) {
-    const entry = { path: write.path, action: write.action, expectedHash: write.expectedHash };
-    if (write.action !== "create" && fs.existsSync(write.target)) {
-      write.preimage = path.join(transactionDir, "preimages", String(index));
-      entry.preimage = `preimages/${index}`;
-      fs.copyFileSync(write.target, write.preimage);
+    const journal = { id: transactionId, createdAt: new Date().toISOString(), root, writes: [] };
+    for (const [index, write] of plan.entries()) {
+      const entry = { path: write.path, action: write.action, expectedHash: write.expectedHash };
+      if (write.action !== "create" && fs.existsSync(write.target)) {
+        write.preimage = path.join(transactionDir, "preimages", String(index));
+        entry.preimage = `preimages/${index}`;
+        try {
+          fs.copyFileSync(write.target, write.preimage);
+        } catch (error) {
+          throw toStorageIoError(error, write.path, "staging the preimage for");
+        }
+      }
+      if (write.content !== null) {
+        write.staged = path.join(transactionDir, "contents", String(index));
+        entry.content = `contents/${index}`;
+        try {
+          fs.writeFileSync(write.staged, write.content);
+        } catch (error) {
+          throw toStorageIoError(error, write.path, "staging content for");
+        }
+      }
+      journal.writes.push(entry);
     }
-    if (write.content !== null) {
-      write.staged = path.join(transactionDir, "contents", String(index));
-      entry.content = `contents/${index}`;
-      fs.writeFileSync(write.staged, write.content);
+    fs.writeFileSync(path.join(transactionDir, "journal.json"), JSON.stringify(journal, null, 2));
+  } catch (error) {
+    if (error instanceof StorageError) {
+      throw error;
     }
-    journal.writes.push(entry);
+    throw toStorageIoError(error, transactionDir, "staging the transaction in");
   }
-  fs.writeFileSync(path.join(transactionDir, "journal.json"), JSON.stringify(journal, null, 2));
 }
 
 function applyWrite(write) {
-  if (write.action === "remove") {
-    fs.unlinkSync(write.target);
-    return;
+  try {
+    if (write.action === "remove") {
+      fs.unlinkSync(write.target);
+      return;
+    }
+    fs.renameSync(write.staged, write.target);
+  } catch (error) {
+    throw toStorageIoError(error, write.path, `applying the ${write.action} to`);
   }
-  fs.renameSync(write.staged, write.target);
 }
 
 function rollbackApplied(applied) {
