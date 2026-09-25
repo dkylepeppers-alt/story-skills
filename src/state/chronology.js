@@ -622,8 +622,16 @@ function validDateText(text) {
   const month = Number(match[2]);
   const day = Number(match[3]);
   if (month < 1 || month > 12 || day < 1) return false;
-  const probe = new Date(Date.UTC(year, month - 1, day));
-  return probe.getUTCFullYear() === year && probe.getUTCMonth() === month - 1 && probe.getUTCDate() === day;
+  // Calendar arithmetic, not Date.UTC: Date.UTC maps years 0-99 to 1900-1999.
+  return day <= daysInMonth(year, month);
+}
+
+function daysInMonth(year, month) {
+  if (month === 2) {
+    const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+    return leap ? 29 : 28;
+  }
+  return [4, 6, 9, 11].includes(month) ? 30 : 31;
 }
 
 function validClock(text) {

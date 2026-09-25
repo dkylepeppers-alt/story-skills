@@ -416,6 +416,20 @@ describe("partial chronology", () => {
       .toBe(order.diagnostics.filter((item) => item.code === "MALFORMED_TIMESTAMP").length);
   });
 
+  test("four-digit years before 0100 are real dates", async () => {
+    const p = await makeProject();
+    await p.addScene({ id: "scn_ancient", title: "Ancient", chronology: { date: "0099-02-01" } });
+    await p.addScene({ id: "scn_later", title: "Later", chronology: { date: "0100-01-01" } });
+    await p.addScene({ id: "scn_leap", title: "Leap", chronology: { date: "0004-02-29" } });
+    await p.addScene({ id: "scn_not_leap", title: "Not leap", chronology: { date: "0001-02-29" } });
+    const order = buildChronology(await p.load());
+    const malformed = order.diagnostics.filter((item) => item.code === "MALFORMED_TIMESTAMP");
+    expect(malformed.map((item) => item.recordIds[0])).toEqual(["scn_not_leap"]);
+    expect(order.scenes.find((scene) => scene.id === "scn_ancient").timestamp).toEqual({ precision: "date", day: "0099-02-01" });
+    expect(order.compare(p.exit("scn_ancient"), p.entry("scn_later"))).toBe("before");
+    expect(order.scenes.find((scene) => scene.id === "scn_leap").timestamp.precision).toBe("date");
+  });
+
   test("a fact window is unresolved until a boundary excludes it", async () => {
     const p = await makeProject();
     await p.addScene({ id: "scn_left", title: "Left" });
