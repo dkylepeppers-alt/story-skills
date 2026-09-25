@@ -149,6 +149,25 @@ it. Decision scope ids, issue affected ids, evidence scenes, and
 `dismissal.record-id` are references in the shared index, so they are
 `DANGLING_REFERENCE` findings when missing and block entity removal.
 
+Task 7 adds context packets (`src/context/`), a new capability with no
+baseline equivalent. `buildContext(project, request)` selects source material
+for one of ten tasks (`plan`, `draft`, `revise`, `review`, `world`, `memory`,
+`research`, `series`, `image`, `publish`). Scene tasks (`draft`, `revise`,
+`review`, `image`) need a scene cursor. The other tasks work at project level.
+Every item carries a reason and source references (the record file, the
+record's own SourceRefs, or the exact prose span and its hash). A draft gets
+target prose only up to the cursor. Revision and review impact material
+(later passages and facts that start after the cursor) is kept in a separate
+`impact` list, never among the writer's items. A reader simulation (`review`
+with `audience: reader`) gets only prose before the reading boundary and
+reader reveals whose reveal point and every source span are behind it. It
+never gets the project contract, outline, profiles or plans. The default
+budget is 48,000 UTF-8 bytes over the whole serialized packet. Optional items
+that do not fit are listed in `omissions` with a retrieval id. When required
+material cannot fit, the packet carries no items, a `CONTEXT_BUDGET_EXCEEDED`
+error and the required source list. Linked plans, research and issues are found
+through the shared reference index; decisions apply by scope as in Task 6.
+
 ## 2. CLI options
 
 Baseline source of truth: `src/options.js` (68 registered options: 60 with

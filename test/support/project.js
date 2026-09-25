@@ -245,17 +245,25 @@ export async function makeChronologyFixture() {
   return p;
 }
 
-// One cellar scene with three beats. Zoë takes the key at beat_handoff, Ada
-// learns it at beat_confession, and Ada's false belief that the key is lost
-// is established from beat_arrival. Every fact carries a real source hash.
+// An opening scene, then (in story and reading order) one cellar scene with
+// three beats. Zoë takes the
+// key at beat_handoff, Ada learns it at beat_confession, and Ada's false
+// belief that the key is lost is established from beat_arrival. The reader
+// learns who holds the key only at beat_confession (fact_later_reveal).
+// Every fact carries a real source hash.
 export async function makeKnowledgeFixture() {
   const p = await makeProject();
   await p.addEntity({ id: "chr_zoe", type: "character", name: "Zoë Voss" });
   await p.addEntity({ id: "chr_ada", type: "character", name: "Ada Quill" });
   await p.addEntity({ id: "obj_brass_key", type: "object", name: "Brass Key" });
-  await p.addScene({ id: "scn_cellar", title: "Cellar" });
+  await p.addScene({ id: "scn_opening", title: "Opening", cast: ["chr_ada"] });
+  await p.addScene({ id: "scn_cellar", title: "Cellar", cast: ["chr_ada", "chr_zoe"], chronology: { after: ["scn_opening"] } });
+  const opening = "<!-- story-scene: scn_opening -->\n";
   const marker = "<!-- story-scene: scn_cellar -->\n";
-  p.write("chapters/one.md", p.read("chapters/one.md").replace(marker, [
+  p.write("chapters/one.md", p.read("chapters/one.md").replace(opening, [
+    opening,
+    "Ada reaches the inn at dusk with a borrowed lantern.\n"
+  ].join("")).replace(marker, [
     marker,
     "<!-- story-beat: beat_arrival -->\n",
     "Ada finds the cellar door open and decides the key is lost.\n",
@@ -289,6 +297,15 @@ export async function makeKnowledgeFixture() {
     value: "The brass key is lost",
     "valid-from": { scene: "scn_cellar", beat: "beat_arrival", side: "after" },
     sources: [p.source("scn_cellar", "beat_arrival")]
+  });
+  await p.addFact({
+    id: "fact_later_reveal",
+    kind: "reader-reveal",
+    subject: "obj_brass_key",
+    predicate: "holder",
+    value: "chr_zoe",
+    "valid-from": { scene: "scn_cellar", beat: "beat_confession", side: "after" },
+    sources: [p.source("scn_cellar", "beat_confession")]
   });
   return p;
 }
