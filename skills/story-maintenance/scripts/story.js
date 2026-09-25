@@ -24219,32 +24219,86 @@ function retractFactCommand(ctx) {
   }));
 }
 
-// src/cli/handlers/project.js
-function optionValue3(value) {
-  return Array.isArray(value) ? value[value.length - 1] : value;
+// src/state/knowledge.js
+var PROFILE_TYPES = new Set(["character", "location", "system", "faction", "object"]);
+var EPISTEMIC_KINDS = new Set(["knowledge", "belief"]);
+var CURSOR_CODES = new Set(["INVALID_CURSOR", "MISSING_SCENE", "MISSING_BEAT"]);
+var HISTORY_HEADING = /^#{1,6}\s+(?:history|backstory|biography|timeline|later life|fate|future)\b/i;
+var DATED_ENTRY = /^\s*(?:[-*+]\s+)?(?:\d{1,4}|year\s+\d+|age\s+\d+|chapter\s+\d+|book\s+\d+)\s*(?:[:\u2013\u2014]|-\s)/i;
+var LATER_PHRASE = /\b(?:years later|later in life|eventually|by the end of the (?:story|book|series)|will (?:die|become|betray|learn|lose|marry|kill|leave|discover))\b/i;
+function temporalLine(body) {
+  const lines = body.split(/\r?\n/);
+  for (let index = 0;index < lines.length; index += 1) {
+    const line = lines[index];
+    if (HISTORY_HEADING.test(line) || DATED_ENTRY.test(line) || LATER_PHRASE.test(line)) {
+      return { number: index + 1, text: line.trim() };
+    }
+  }
+  return null;
 }
-function initToolkitCommand(ctx) {
-  return present(ctx, initProject({
-    title: ctx.parsed.positionals.slice(1).join(" "),
-    cwd: ctx.cwd,
-    dir: optionValue3(ctx.parsed.options.dir),
-    genre: optionValue3(ctx.parsed.options.genre),
-    subGenre: optionValue3(ctx.parsed.options["sub-genre"]),
-    settingEra: optionValue3(ctx.parsed.options["setting-era"]),
-    pov: optionValue3(ctx.parsed.options.pov),
-    tense: optionValue3(ctx.parsed.options.tense),
-    synopsis: optionValue3(ctx.parsed.options.synopsis),
-    dryRun: isTruthy(ctx.parsed.options["dry-run"])
-  }));
+function biographyFindings(project, ids) {
+  const wanted = ids === undefined ? null : new Set(ids);
+  const findings = [];
+  const entries = [...project.records.values()].filter((entry) => PROFILE_TYPES.has(entry.type) && (wanted === null || wanted.has(entry.id))).sort((left, right) => left.id.localeCompare(right.id, "en"));
+  for (const entry of entries) {
+    const line = temporalLine(entry.body ?? "");
+    if (!line)
+      continue;
+    findings.push({
+      code: "UNSPLIT_BIOGRAPHY",
+      severity: "warning",
+      message: `${entry.path}: profile body line ${line.number} looks like temporal history that is not split into facts: "${line.text}"`,
+      recordIds: [entry.id],
+      sources: [],
+      evidence: "candidate",
+      action: "Move dated or later events into facts with valid-from cursors, keeping the profile to stable traits."
+    });
+  }
+  return findings;
 }
-function importToolkitCommand(ctx) {
-  return present(ctx, importMarkdown({
-    source: ctx.parsed.positionals[1],
-    cwd: ctx.cwd,
-    out: optionValue3(ctx.parsed.options.out),
-    title: optionValue3(ctx.parsed.options.title),
-    dryRun: isTruthy(ctx.parsed.options["dry-run"])
-  }));
+function statementFor(project, value) {
+  if (!isIdReference(value))
+    return null;
+  const target = project.records.get(value);
+  if (!target || target.type !== "fact")
+    return null;
+  const fact = target.record;
+  return { id: target.id, status: fact.status, kind: fact.kind, subject: fact.subject, predicate: fact.predicate, value: fact.value };
+}
+function knowledgeAt(project, characterId, cursor, options = {}) {
+  const entry = project.records.get(characterId);
+  if (!entry || entry.type !== "character") {
+    return {
+      character: null,
+      knows: [],
+      believes: [],
+      unresolved: [],
+      diagnostics: [{
+        code: "CHARACTER_NOT_FOUND",
+        severity: "error",
+        message: `No character with id ${characterId}`,
+        recordIds: [characterId],
+        sources: [],
+        evidence: "structural",
+        action: "Check the id with story entity show, or add the character first."
+      }]
+    };
+  }
+  const state = resolveState(project, cursor, options);
+  const mine = (item) => item.subject === characterId && EPISTEMIC_KINDS.has(item.kind);
+  const withStatement = (item) => ({ ...item, statement: statementFor(project, item.value) });
+  const facts = state.facts.filter(mine).map(withStatement);
+  const unresolved = state.unresolved.filter(mine);
+  const relevant = new Set([...facts, ...unresolved].map((item) => item.id));
+  const diagnostics = state.diagnostics.filter((item) => CURSOR_CODES.has(item.code) || item.recordIds.some((id) => relevant.has(id)));
+  diagnostics.push(...biographyFindings(project, [characterId]));
+  return {
+    character: { id: entry.id, name: entry.record.name ?? entry.record.title ?? "" },
+    knows: facts.filter((item) => item.kind === "knowledge"),
+    believes: facts.filter((item) => item.kind === "belief"),
+    unresolved,
+    diagnostics
+  };
 }
 
 // src/cli/handlers/timeline.js
@@ -24365,6 +24419,155 @@ function formatLegacyTimelineLog(result) {
   return `${lines.join(`
 `)}
 `;
+}
+
+// src/cli/handlers/knowledge.js
+var COMMAND = "knowledge";
+var TOOLKIT_USAGE = "Usage: story knowledge <character-id> --scene <id> [--beat <id>] [--side before|after] [--project <path>]";
+var LEGACY_USAGE = "Usage: story knowledge <character-id> --at <chapter-id> [--path <project>]";
+function knowledgeCommand(ctx) {
+  const root = ctx.root();
+  if (isStoryToolkitProject(root))
+    return present(ctx, toolkitKnowledge(ctx, root));
+  return present(ctx, legacyKnowledge(ctx, root));
+}
+function invalid2(message) {
+  return failure(COMMAND, message, "INVALID_INVOCATION", 2);
+}
+function toolkitKnowledge(ctx, root) {
+  const options = ctx.parsed.options;
+  if (options.at !== undefined) {
+    return invalid2(`--at is for schema v2 projects; use --scene on a story-toolkit project.
+${TOOLKIT_USAGE}`);
+  }
+  const cursor = cursorOption(options);
+  if (cursor === undefined)
+    return invalid2(TOOLKIT_USAGE);
+  const opened = openProject(root, COMMAND);
+  if (opened.error)
+    return opened.error;
+  const blocked = loadErrorResult(COMMAND, opened.project);
+  if (blocked)
+    return blocked;
+  const characterId = String(ctx.parsed.positionals[1]);
+  const result = knowledgeAt(opened.project, characterId, cursor);
+  const ok = !result.diagnostics.some((item) => item.severity === "error");
+  const data = {
+    cursor,
+    character: result.character,
+    knows: result.knows,
+    believes: result.believes,
+    unresolved: result.unresolved
+  };
+  return {
+    envelope: envelope({ command: COMMAND, ok, data, diagnostics: result.diagnostics, writes: [] }),
+    exitCode: ok ? 0 : 1,
+    text: formatKnowledge(characterId, data, result.diagnostics)
+  };
+}
+function cursorLabel(cursor) {
+  const beat = cursor.beatId === undefined ? "" : ` ${cursor.beatId}`;
+  return `${cursor.sceneId}${beat} (${cursor.side})`;
+}
+function describe2(item) {
+  if (item.statement) {
+    const { id, subject, predicate, value } = item.statement;
+    return `${id} (${subject} ${predicate} ${value})`;
+  }
+  return String(item.value);
+}
+function section(lines, title, items, render) {
+  lines.push(`${title}:`);
+  if (items.length === 0)
+    lines.push("- None");
+  for (const item of items)
+    lines.push(render(item));
+}
+function formatKnowledge(characterId, data, diagnostics) {
+  const name = data.character ? ` (${data.character.name})` : "";
+  const lines = [`Knowledge of ${characterId}${name} at ${cursorLabel(data.cursor)}:`];
+  section(lines, "Knows", data.knows, (item) => `- ${item.id}: ${describe2(item)}`);
+  section(lines, "Believes", data.believes, (item) => `- ${item.id}: ${describe2(item)}`);
+  if (data.unresolved.length > 0) {
+    section(lines, "Unresolved", data.unresolved, (item) => `- ${item.id}: ${String(item.value)} (${item.reason})`);
+  }
+  if (diagnostics.length > 0) {
+    section(lines, "Diagnostics", diagnostics, (item) => `- ${item.severity} ${item.code}: ${item.message}`);
+  }
+  return `${lines.join(`
+`)}
+`;
+}
+function legacyKnowledge(ctx, root) {
+  const options = ctx.parsed.options;
+  if (options.scene !== undefined || options.beat !== undefined || options.side !== undefined) {
+    return invalid2(`--scene is for story-toolkit projects; schema v2 knowledge uses --at.
+${LEGACY_USAGE}`);
+  }
+  const characterId = String(ctx.parsed.positionals[1]);
+  const atChapterId = Array.isArray(options.at) ? options.at.at(-1) : options.at;
+  if (typeof atChapterId !== "string")
+    return invalid2(LEGACY_USAGE);
+  let entries;
+  try {
+    entries = knowledgeAtChapter(root, characterId, atChapterId);
+  } catch (error) {
+    return legacyFailure(error);
+  }
+  const text = entries.length === 0 ? `No recorded knowledge for ${characterId} at ${atChapterId}
+` : entries.map((entry) => {
+    const source = entry.learnedIn === "" ? "pre-existing knowledge" : `learned in ${entry.learnedIn}`;
+    return `- ${entry.knows} (${source})
+`;
+  }).join("");
+  return {
+    envelope: envelope({
+      command: COMMAND,
+      ok: true,
+      data: { format: "schema-v2", character: characterId, at: atChapterId, entries },
+      writes: []
+    }),
+    exitCode: 0,
+    text
+  };
+}
+function legacyFailure(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes("is not a story project: missing story.md")) {
+    return failure(COMMAND, message, "PROJECT_NOT_FOUND", 2);
+  }
+  if (error && (error.code === "EACCES" || error.code === "EPERM")) {
+    return failure(COMMAND, message, "OPERATION_FAILED", 4);
+  }
+  return failure(COMMAND, message, "COMMAND_FAILED", 1);
+}
+
+// src/cli/handlers/project.js
+function optionValue3(value) {
+  return Array.isArray(value) ? value[value.length - 1] : value;
+}
+function initToolkitCommand(ctx) {
+  return present(ctx, initProject({
+    title: ctx.parsed.positionals.slice(1).join(" "),
+    cwd: ctx.cwd,
+    dir: optionValue3(ctx.parsed.options.dir),
+    genre: optionValue3(ctx.parsed.options.genre),
+    subGenre: optionValue3(ctx.parsed.options["sub-genre"]),
+    settingEra: optionValue3(ctx.parsed.options["setting-era"]),
+    pov: optionValue3(ctx.parsed.options.pov),
+    tense: optionValue3(ctx.parsed.options.tense),
+    synopsis: optionValue3(ctx.parsed.options.synopsis),
+    dryRun: isTruthy(ctx.parsed.options["dry-run"])
+  }));
+}
+function importToolkitCommand(ctx) {
+  return present(ctx, importMarkdown({
+    source: ctx.parsed.positionals[1],
+    cwd: ctx.cwd,
+    out: optionValue3(ctx.parsed.options.out),
+    title: optionValue3(ctx.parsed.options.title),
+    dryRun: isTruthy(ctx.parsed.options["dry-run"])
+  }));
 }
 
 // src/cli/registry.js
@@ -24591,29 +24794,27 @@ var COMMAND_LIST = [
   {
     name: "knowledge",
     usage: "knowledge <id>",
-    summary: ["List what a character knew at a chapter; requires --at"],
-    project: "flag",
-    run({ parsed, io, root }) {
-      const characterId = parsed.positionals[1];
-      const atChapterId = parsed.options.at;
-      if (!characterId || typeof atChapterId !== "string") {
-        io.stderr.write(`Usage: story knowledge <character-id> --at <chapter-id> [--path <project>]
-`);
-        return 1;
-      }
-      const entries = knowledgeAtChapter(root(), characterId, atChapterId);
-      if (entries.length === 0) {
-        io.stdout.write(`No recorded knowledge for ${characterId} at ${atChapterId}
-`);
-        return 0;
-      }
-      for (const entry of entries) {
-        const source = entry.learnedIn === "" ? "pre-existing knowledge" : `learned in ${entry.learnedIn}`;
-        io.stdout.write(`- ${entry.knows} (${source})
-`);
-      }
-      return 0;
-    }
+    summary: [
+      "List what a character knows and believes at a",
+      "scene cursor (--scene, --beat, --side); schema v2",
+      "uses a chapter (--at)"
+    ],
+    project: "discover",
+    returnsResult: true,
+    strictOptions: true,
+    enforceArgs: true,
+    args: [{ name: "id", required: true }],
+    optionSchema: [
+      { name: "project" },
+      { name: "path" },
+      { name: "format", values: ["text", "json"] },
+      { name: "at" },
+      { name: "scene" },
+      { name: "beat" },
+      { name: "side", values: ["before", "after"] }
+    ],
+    examples: ["story knowledge chr_ada --scene scn_cellar --beat beat_confession --side after"],
+    run: knowledgeCommand
   },
   {
     name: "compare",

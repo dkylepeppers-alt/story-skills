@@ -32,7 +32,7 @@ Baseline source of truth: `src/commands.js` (23 commands, help order).
 | `wordcount` | Count chapter prose words; `--write` updates frontmatter | Retained | 10 | `test/story.test.js`, `test/cli.test.js` |
 | `links` | Cross-reference and backlink checks | Retained | 10 | `test/diagnostics.test.js` |
 | `continuity` | Deaths, promises/payoffs, questions, casts, durable state; exemptions | Retained | 10 | `test/continuity.test.js`, `test/custody-time.test.js`, `test/clue.test.js`, `test/exemptions.test.js` |
-| `knowledge` | What a character knew at a chapter (`--at`) | Adapted (scene/beat cursors replace chapter granularity) | 5 | `test/knowledge.test.js`, `test/knowledge-errors.test.js` |
+| `knowledge` | What a character knew at a chapter (`--at`) | Adapted (story-toolkit projects use `--scene`/`--beat`/`--side` cursors and return knows, believes, and unresolved items; schema v2 keeps `--at`; usage errors exit 2 under the shared exit codes) | 5 | `test/knowledge.test.js`, `test/knowledge-errors.test.js`, `test/state.test.js` |
 | `compare` | Compare with an earlier draft: word changes, added/removed chapters, unchanged paragraphs | Adapted (stable-ID matching, scopes, snapshots; `--against` folder baseline intentionally removed, see §7) | 8 | `test/compare.test.js`, `test/changes.test.js`, `test/scope.test.js` |
 | `progress` | Words vs targets/deadline; `--log` records the session | Retained | 10 | `test/progress.test.js` |
 | `timeline` | Story-time order, POV balance, character presence | Adapted (partial-order chronology; `unordered` is explicit) | 4 | `test/timeline.test.js`, `test/custody-time.test.js`, `test/chronology.test.js` |
@@ -99,6 +99,18 @@ whether it applies at that cursor. Inactive and `work/` records never apply.
 Facts without provenance, with stale or unreadable evidence, or with an
 unordered start are returned as unresolved rather than applied.
 
+On a `format: story-toolkit` project, `story knowledge <character> --scene
+<id> [--beat <id>] [--side before|after]` lists the character's knowledge and
+belief facts that apply at the cursor. Knowledge names the fact it knows, and
+knowing a fact never makes it established world state. It also warns when the
+character profile looks like an unsplit biography (`UNSPLIT_BIOGRAPHY`). An
+unknown character or cursor scene exits 1. A missing `--scene`, or `--at` on a
+toolkit project, exits 2. Schema v2 `story knowledge <id> --at <chapter>`
+keeps its chapter report, now returned through the shared result envelope:
+usage errors and a missing project exit 2, an unknown character or chapter
+exits 1, and permission failures exit 4. `knowledge` now uses project
+discovery (`--project`, `--path`, or the nearest parent with `story.md`).
+
 ## 2. CLI options
 
 Baseline source of truth: `src/options.js` (68 registered options: 60 with
@@ -116,7 +128,7 @@ them to `--kind`.
 | Maintenance | `--write --log --date` | Retained | 10 | `test/progress.test.js`, `test/story.test.js` |
 | Comparison | `--ref --against` | Adapted (git refs retained; `--against` removed, see §7) | 8 | `test/compare.test.js`, `test/changes.test.js` |
 | Output | `--out --format --shunn --pages --actionable` | Adapted. `--format text\|json` selects the result envelope; `markdown\|epub\|docx\|shunn` stay build kinds until Task 12 `--kind` | 3, 10, 12 | `test/publishing.test.js`, `test/command-contract.test.js` |
-| Knowledge | `--at` | Adapted (chapter id → scene/beat cursor) | 5 | `test/knowledge.test.js` |
+| Knowledge | `--at` | Adapted (story-toolkit projects use the `--scene --beat --side` cursor; `--at` stays for schema v2 projects and is an invalid invocation on story-toolkit projects) | 5 | `test/knowledge.test.js`, `test/knowledge-errors.test.js` |
 | Entity fields | `--number --chapter --scene --type --role --status --mode --date --time --travel-hours --dilemma --sequel --location(s) --character(s) --mention(s) --member(s) --owner --arc(s) --introduced --resolved --planted --payoff --significance-delayed --category --alias(es) --region --population --controlled-by --prevalence --acts --placement --order --source(s) --used-in` | Adapted (schema-validated `--data <json-file>` mutations become the primary contract; per-design §9) | 3, 5, 6, 13 | `test/project.test.js`, `test/state.test.js`, `test/memory.test.js`, `test/assets.test.js` |
 | Undocumented aliases | `--locations --characters --mentions --members --arcs --aliases --act --sources` | Intentionally removed once schema v2 `add` is replaced (undocumented convenience aliases; behavior replaced by repeatable documented forms and `--data`). Task 3 still accepts them because v2 `add` and `test/cli.test.js` use them | 3 | `test/cli.test.js` |
 | Global (new) | `--help/-h --version/-v` | Retained. `--help` and `--version` stay plain text even when `--format json` is present | 3 | `test/registry.test.js`, `test/command-contract.test.js` |
@@ -124,7 +136,7 @@ them to `--kind`.
 | Mutation preview (new) | `--dry-run` | Added in Task 3 for fork init, import, and entity mutations; Task 5 adds `fact add` and `fact retract` | 3, 5 | `test/project.test.js`, `test/state.test.js` |
 | Removal policy (new) | `--policy refuse\|detach` | Added in Task 3 for `entity remove` | 3 | `test/rename-remove.test.js` |
 | Structured data (new) | `--data <json-file>` | Added in Task 5 for `fact add` | 5 | `test/state.test.js` |
-| Story cursor (new) | `--scene <n\|id> --beat <id> --side before\|after` | Task 5 `fact list` cursor. `--scene` still takes a scene number for schema v2 `add`; `--side` defaults to `before` | 5 | `test/state.test.js` |
+| Story cursor (new) | `--scene <n\|id> --beat <id> --side before\|after` | Task 5 `fact list` and `knowledge` cursor. `--scene` still takes a scene number for schema v2 `add`; `--side` defaults to `before` | 5 | `test/state.test.js` |
 | Inactive records (new) | `--include-inactive --include-work` | Added in Task 5 for `fact list`. Listing never makes an inactive or `work/` record apply at a cursor | 5 | `test/state.test.js` |
 | Fork selector (new) | `--toolkit` | Added in Task 3. Selects story-toolkit `init` and `import` | 3 | `test/project.test.js`, `test/command-contract.test.js` |
 

@@ -4,6 +4,7 @@ import path from "node:path";
 import { runCli } from "../src/cli.js";
 import { createStoryProject, knowledgeAtChapter } from "../src/story.js";
 import { makeTempDir, memoryIo, writeMarkdown } from "./helpers.js";
+import { makeKnowledgeFixture } from "./support/project.js";
 
 function knowledgeProject() {
   const cwd = makeTempDir();
@@ -121,14 +122,18 @@ status: alive
     expect(none.out).toBe("No recorded knowledge for blank-slate at chapter-03\n");
   });
 
-  test("cli requires --at and a character id", () => {
-    const { cwd } = knowledgeProject();
-    const missingAt = invoke(cwd, ["knowledge", "mara-finn"]);
-    expect(missingAt.code).toBe(1);
+  test("cli requires --at and a character id as an invalid invocation", () => {
+    const { root, cwd } = knowledgeProject();
+    const missingAt = invoke(cwd, ["knowledge", "mara-finn", "--path", root]);
+    expect(missingAt.code).toBe(2);
     expect(missingAt.err).toContain("Usage: story knowledge");
 
-    const missingCharacter = invoke(cwd, ["knowledge", "--at", "chapter-01"]);
-    expect(missingCharacter.code).toBe(1);
+    const missingCharacter = invoke(cwd, ["knowledge", "--at", "chapter-01", "--path", root]);
+    expect(missingCharacter.code).toBe(2);
+
+    const cursor = invoke(cwd, ["knowledge", "mara-finn", "--scene", "scn_one", "--path", root]);
+    expect(cursor.code).toBe(2);
+    expect(cursor.err).toContain("--scene is for story-toolkit projects");
   });
 
   test("cli errors for unknown characters and chapters", () => {
@@ -136,5 +141,53 @@ status: alive
     const unknown = invoke(cwd, ["knowledge", "nobody-here", "--at", "chapter-01", "--path", root]);
     expect(unknown.code).toBe(1);
     expect(unknown.err).toContain("Unknown character nobody-here");
+  });
+});
+
+describe("story-toolkit knowledge at a scene cursor", () => {
+  test("lists what a character knows and believes at a beat boundary", async () => {
+    const p = await makeKnowledgeFixture();
+    const before = invoke(p.root, ["knowledge", "chr_ada", "--scene", "scn_cellar", "--beat", "beat_confession"]);
+    expect(before.code).toBe(0);
+    expect(before.out).toBe([
+      "Knowledge of chr_ada (Ada Quill) at scn_cellar beat_confession (before):",
+      "Knows:",
+      "- None",
+      "Believes:",
+      "- fact_false_belief: The brass key is lost",
+      ""
+    ].join("\n"));
+    const after = invoke(p.root, ["knowledge", "chr_ada", "--scene", "scn_cellar", "--beat", "beat_confession", "--side", "after"]);
+    expect(after.out).toContain("Knows:\n- fact_ada_learns: fact_key_handoff (obj_brass_key holder chr_zoe)\n");
+    const exit = invoke(p.root, ["knowledge", "chr_ada", "--scene", "scn_cellar", "--side", "after"]);
+    expect(exit.out.split("\n")[0]).toBe("Knowledge of chr_ada (Ada Quill) at scn_cellar (after):");
+  });
+
+  test("--format json returns the knowledge result envelope", async () => {
+    const p = await makeKnowledgeFixture();
+    const result = invoke(p.root, ["knowledge", "chr_ada", "--scene", "scn_cellar", "--side", "after", "--format", "json"]);
+    expect(result.code).toBe(0);
+    const parsed = JSON.parse(result.out);
+    expect(parsed.command).toBe("knowledge");
+    expect(parsed.ok).toBe(true);
+    expect(parsed.data.cursor).toEqual({ sceneId: "scn_cellar", side: "after" });
+    expect(parsed.data.character).toEqual({ id: "chr_ada", name: "Ada Quill" });
+    expect(parsed.data.knows.map((item) => [item.id, item.statement.id])).toEqual([["fact_ada_learns", "fact_key_handoff"]]);
+    expect(parsed.data.believes.map((item) => item.id)).toEqual(["fact_false_belief"]);
+    expect(parsed.data.unresolved).toEqual([]);
+    expect(parsed.writes).toEqual([]);
+  });
+
+  test("unresolved knowledge and an unsplit biography are reported as warnings", async () => {
+    const p = await makeKnowledgeFixture();
+    p.write("chapters/one.md", p.read("chapters/one.md").replace("“I took it,” Zoë says.", "“I took it,” Zoë whispers."));
+    p.write("characters/chr_ada.md", `${p.read("characters/chr_ada.md")}\n## Later life\n\nAda eventually runs the guild.\n`);
+    const result = invoke(p.root, ["knowledge", "chr_ada", "--scene", "scn_cellar", "--side", "after"]);
+    expect(result.code).toBe(0);
+    expect(result.out).toContain("Unresolved:\n- fact_ada_learns: fact_key_handoff (SOURCE_STALE)\n");
+    expect(result.out).toContain("Diagnostics:\n- warning SOURCE_STALE: ");
+    expect(result.out).toContain("- warning UNSPLIT_BIOGRAPHY: ");
+    const parsed = JSON.parse(invoke(p.root, ["knowledge", "chr_ada", "--scene", "scn_cellar", "--side", "after", "--format", "json"]).out);
+    expect(parsed.diagnostics.map((item) => item.code)).toEqual(["SOURCE_STALE", "UNSPLIT_BIOGRAPHY"]);
   });
 });
