@@ -74,9 +74,13 @@ export function resolveRoot(cwd, parsed, name) {
   }
   const flagPath = projectFlag ?? pathFlag;
   const flagLabel = projectFlag !== undefined ? "--project" : "--path";
-  if (command?.project !== "positional") {
+  if (command?.project === "discover") {
     if (flagPath !== undefined) return path.resolve(cwd, String(flagPath));
     return discoverProject(cwd) ?? path.resolve(cwd, ".");
+  }
+  if (command?.project !== "positional") {
+    if (flagPath !== undefined) return path.resolve(cwd, String(flagPath));
+    return path.resolve(cwd, ".");
   }
   const positionalPath = command.path.length === 1 ? parsed.positionals[1] : undefined;
   if (positionalPath !== undefined && flagPath !== undefined) {
@@ -90,7 +94,7 @@ export function resolveRoot(cwd, parsed, name) {
   if (flagPath !== undefined || positionalPath !== undefined) {
     return path.resolve(cwd, String(flagPath ?? positionalPath));
   }
-  return discoverProject(cwd) ?? path.resolve(cwd, ".");
+  return path.resolve(cwd, ".");
 }
 
 function captureIo(cwd) {

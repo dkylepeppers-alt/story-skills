@@ -112,6 +112,19 @@ describe("command result contract", () => {
     expect(flagged.out).toContain("Ada");
   });
 
+  test("a legacy command run from a child directory does not write into a parent story", () => {
+    const cwd = makeTempDir();
+    expect(invoke(cwd, ["init", "Unrelated Parent"]).code).toBe(0);
+    const root = path.join(cwd, "unrelated-parent");
+    const child = path.join(root, "notes");
+    fs.mkdirSync(child);
+    const before = snapshot(root);
+    const added = invoke(child, ["add", "character", "Ada"]);
+    expect(added.code).not.toBe(0);
+    expect(snapshot(root)).toEqual(before);
+    expect(fs.existsSync(path.join(root, "characters", "ada.md"))).toBe(false);
+  });
+
   test("an explicit project path does not walk up to a parent story", () => {
     const parent = makeTempDir();
     expect(invoke(parent, ["init", "Here", "--toolkit", "--dir", "."]).code).toBe(0);

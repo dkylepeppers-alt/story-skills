@@ -84,7 +84,7 @@ them to `--kind`.
 
 | Option group | Options | Status | Task | Replacement regression |
 |---|---|---|---|---|
-| Project selection | `--path` | Retained. `--project` is a new alias; discovery walks parents for `story.md` only when neither flag nor a positional path is set | 3 | `test/command-contract.test.js`, `test/registry.test.js` |
+| Project selection | `--path` | Retained. `--project` is a new alias. Only `project: discover` commands walk parents for `story.md`; legacy commands stay on the flag, positional path, or cwd | 3 | `test/command-contract.test.js`, `test/registry.test.js` |
 | Creation | `--title --dir --genre --sub-genre --setting-era --theme --themes --pov --tense --synopsis --series --book-number --follows --precedes --force` | Adapted | 3 | `test/project.test.js`, `test/init-add-safety.test.js` |
 | Maintenance | `--write --log --date` | Retained | 10 | `test/progress.test.js`, `test/story.test.js` |
 | Comparison | `--ref --against` | Adapted (git refs retained; `--against` removed, see §7) | 8 | `test/compare.test.js`, `test/changes.test.js` |
