@@ -31,7 +31,7 @@ Baseline source of truth: `src/commands.js` (23 commands, help order).
 | `reindex` | Rebuild registry tables from markdown | Retained (derived indexes, `--write` semantics per design) | 10 | `test/diagnostics.test.js`, `test/story.test.js` |
 | `wordcount` | Count chapter prose words; `--write` updates frontmatter | Retained | 10 | `test/story.test.js`, `test/cli.test.js` |
 | `links` | Cross-reference and backlink checks | Retained | 10 | `test/diagnostics.test.js` |
-| `continuity` | Deaths, promises/payoffs, questions, casts, durable state; exemptions | Retained | 10 | `test/continuity.test.js`, `test/custody-time.test.js`, `test/clue.test.js`, `test/exemptions.test.js` |
+| `continuity` | Deaths, promises/payoffs, questions, casts, durable state; exemptions | Retained for schema v2 (story-toolkit projects replace substring exemptions with exact issue dismissals, Task 6) | 10 | `test/continuity.test.js`, `test/custody-time.test.js`, `test/clue.test.js`, `test/exemptions.test.js` |
 | `knowledge` | What a character knew at a chapter (`--at`) | Adapted (story-toolkit projects use `--scene`/`--beat`/`--side` cursors and return knows, believes, and unresolved items; schema v2 keeps `--at`; usage errors exit 2 under the shared exit codes) | 5 | `test/knowledge.test.js`, `test/knowledge-errors.test.js`, `test/state.test.js` |
 | `compare` | Compare with an earlier draft: word changes, added/removed chapters, unchanged paragraphs | Adapted (stable-ID matching, scopes, snapshots; `--against` folder baseline intentionally removed, see §7) | 8 | `test/compare.test.js`, `test/changes.test.js`, `test/scope.test.js` |
 | `progress` | Words vs targets/deadline; `--log` records the session | Retained | 10 | `test/progress.test.js` |
@@ -110,6 +110,22 @@ keeps its chapter report, now returned through the shared result envelope:
 usage errors and a missing project exit 2, an unknown character or chapter
 exits 1, and permission failures exit 4. `knowledge` now uses project
 discovery (`--project`, `--path`, or the nearest parent with `story.md`).
+
+Task 6 replaces substring exemptions on story-toolkit projects with exact
+issue dismissals (`src/memory/issues.js`). A dismissed issue names one
+diagnostic code (`dismissal.code`), its `affected-ids`, and the `evidence`
+fingerprints it was judged against. `applyDismissals` hides a finding only
+when the code is identical, the finding's record ids equal the affected ids,
+and every evidence hash still matches, so one dismissal cannot hide the same
+code on another record. Changed or unreadable evidence reopens the issue
+(`ISSUE_REOPENED`, carrying the prior dismissal). A dismissal without a code,
+affected ids, or evidence is `ISSUE_DISMISSAL_UNBOUND` and dismisses nothing.
+Story-toolkit projects never read `continuity/exemptions.md`; schema v2
+`continuity` keeps its substring exemptions until that command is replaced.
+Wiring dismissals into `check` is the checks task. Decisions
+(`src/memory/decisions.js`) apply by `scope-ids`, where the project id means
+the whole project. Only accepted decisions are instructions, and
+supersession cycles are `SUPERSESSION_CYCLE` errors.
 
 ## 2. CLI options
 
@@ -222,7 +238,7 @@ is superseded or intentionally removed.
 | `knowledge-errors.test.js` | Knowledge failure modes | Adapted | 5 | same file + `test/state.test.js` |
 | `continuity.test.js` | Continuity engine contracts | Adapted | 5, 10 | same file + `test/state.test.js` |
 | `clue.test.js` | Setup/payoff ordering | Retained | 10 | same file |
-| `exemptions.test.js` | Continuity exemptions | Adapted | 6 | `test/memory.test.js` + same file |
+| `exemptions.test.js` | Continuity exemptions | Adapted (schema v2 substring cases kept; story-toolkit exact-dismissal cases added) | 6 | `test/memory.test.js` + same file |
 | `compare.test.js` | Draft comparison | Adapted | 8 | same file + `test/changes.test.js` |
 | `prose.test.js` | Prose lint | Adapted | 10 | same file |
 | `progress.test.js` | Progress tracking/logging | Adapted | 10 | same file |

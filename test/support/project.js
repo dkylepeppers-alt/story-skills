@@ -152,6 +152,30 @@ export async function makeProject(options = {}) {
     entry: (sceneId) => ({ sceneId, side: "before" }),
     exit: (sceneId) => ({ sceneId, side: "after" }),
     cursor: (sceneId, beatId, side) => ({ sceneId, beatId, side }),
+    addDecision: async (decision, body = "") => {
+      put(`decisions/${decision.id}.md`, recordMarkdown({
+        format: "story-toolkit",
+        "schema-version": 1,
+        type: "decision",
+        status: "accepted",
+        ...decision
+      }, body));
+      return decision.id;
+    },
+    addIssue: async (issue, body = "") => {
+      put(`issues/${issue.id}.md`, recordMarkdown({
+        format: "story-toolkit",
+        "schema-version": 1,
+        type: "issue",
+        category: "continuity",
+        severity: "warning",
+        status: "open",
+        ...issue
+      }, body));
+      return issue.id;
+    },
+    // A SourceRef over the current bytes of a whole file.
+    fileSource: (rel, kind = "manuscript") => ({ path: rel, hash: sourceHash(root, { path: rel }), kind }),
     // A manuscript SourceRef over the current bytes of a scene or beat span.
     source: (sceneId, beatId, rel = "chapters/one.md") => {
       const ref = { path: rel, scene: sceneId };
@@ -161,6 +185,20 @@ export async function makeProject(options = {}) {
       return ref;
     }
   };
+
+  // `issue: "open" | "dismissed"` adds issue_fixture, bound to the current
+  // bytes of chapters/one.md. A dismissed fixture names the exact code.
+  if (options.issue !== undefined) {
+    await p.addIssue({
+      id: "issue_fixture",
+      status: options.issue,
+      "affected-ids": ["chp_one"],
+      evidence: [p.fileSource("chapters/one.md")],
+      ...(options.issue === "dismissed"
+        ? { dismissal: { code: "FIXTURE_FINDING", "record-id": "chp_one", reason: "Intentional in the fixture." } }
+        : {})
+    });
+  }
 
   return p;
 }
