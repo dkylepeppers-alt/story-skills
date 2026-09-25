@@ -1,11 +1,11 @@
 {
-  "name": "story-skills",
+  "name": "@dkylepeppers-alt/story-toolkit",
   "interface": {
     "displayName": "Story Skills"
   },
   "plugins": [
     {
-      "name": "story-skills",
+      "name": "@dkylepeppers-alt/story-toolkit",
       "source": {
         "source": "local",
         "path": "./plugins/story-skills"

@@ -22,6 +22,15 @@ export function checkVersionModule(failures, packageVersion, source) {
   return expectEqual(failures, "src/version.js VERSION", packageVersion, match[1]);
 }
 
+// Product release 1.0.0 is reserved for toolkit acceptance; development runs
+// on 1.0.0 prereleases (rc numbering) until then.
+export function checkPrereleaseVersion(failures, packageVersion) {
+  if (!/^1\.0\.0-.+/.test(packageVersion)) {
+    failures.push(`package.json version must be a 1.0.0 prerelease until toolkit acceptance, got ${packageVersion}`);
+  }
+  return failures;
+}
+
 export function checkSkillFrontmatter(failures, skillsDir, readFile) {
   for (const skillName of fs.readdirSync(skillsDir).sort()) {
     const skillDir = path.join(skillsDir, skillName);
@@ -136,6 +145,8 @@ function main() {
   expectEqual(failures, "package/plugin version", packageJson.version, claudePlugin.version);
 
   checkVersionModule(failures, packageJson.version, fs.readFileSync(path.join(repoRoot, "src", "version.js"), "utf8"));
+
+  checkPrereleaseVersion(failures, packageJson.version);
 
   if (codexPlugin.skills !== "./skills/") {
     failures.push(".codex-plugin/plugin.json skills must point to ./skills/");

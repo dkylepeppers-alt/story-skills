@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/dkylepeppers-alt/story-skills/schemas/research.schema.json",
+  "title": "Story Toolkit research record (research/)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "schema-version",
+    "id",
+    "type",
+    "status"
+  ],
+  "properties": {
+    "format": {
+      "const": "story-toolkit"
+    },
+    "schema-version": {
+      "const": 1
+    },
+    "id": {
+      "$ref": "#/$defs/id"
+    },
+    "type": {
+      "const": "research"
+    },
+    "status": {
+      "enum": [
+        "verified",
+        "disputed",
+        "open"
+      ]
+    },
+    "title": {
+      "type": "string"
+    },
+    "citations": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "uncertainty": {
+      "type": "string"
+    },
+    "used-by": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/source-ref"
+      }
+    },
+    "extensions": {
+      "type": "object"
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]*$"
+    },
+    "source-ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "hash",
+        "kind"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "scene": {
+          "type": "string"
+        },
+        "beat": {
+          "type": "string"
+        },
+        "hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "kind": {
+          "enum": [
+            "manuscript",
+            "author-decision",
+            "research",
+            "asset"
+          ]
+        }
+      }
+    },
+    "cursor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scene",
+        "side"
+      ],
+      "properties": {
+        "scene": {
+          "type": "string"
+        },
+        "beat": {
+          "type": "string"
+        },
+        "side": {
+          "enum": [
+            "before",
+            "after"
+          ]
+        }
+      }
+    },
+    "cursor-or-baseline": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "baseline"
+        },
+        {
+          "$ref": "#/$defs/cursor"
+        }
+      ]
+    }
+  }
+}

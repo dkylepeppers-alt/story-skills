@@ -1,0 +1,265 @@
+{
+  "source": {
+    "name": "Creative Writing Skills",
+    "url": "https://github.com/haowjy/creative-writing-skills",
+    "revision": "0d5bf7fd987554e05db7e05d569736e648297722",
+    "revisionUrl": "https://github.com/haowjy/creative-writing-skills/tree/0d5bf7fd987554e05db7e05d569736e648297722",
+    "license": "Apache-2.0",
+    "licenseFile": "licenses/Apache-2.0.txt",
+    "noticeFile": "THIRD_PARTY_NOTICES.md",
+    "verifiedAgainst": "GitHub git tree listing for the pinned revision; no file is imported on a path that is not present in that tree"
+  },
+  "policy": {
+    "adaptationStatus": "planned",
+    "explanation": "Nothing from this source has been imported yet. Imports and adaptations happen in Tasks 14-16 of docs/superpowers/plans/2026-09-24-story-toolkit.md. Each entry below is a selected upstream file with its planned local destination; entries flip to 'imported'/'adapted' only when the material actually lands, and adapted material must carry attribution in the distribution (THIRD_PARTY_NOTICES.md).",
+    "selectionBasis": "docs/superpowers/specs/2026-09-24-story-toolkit-design.md section 3 (Creative material selection and licensing)",
+    "upstreamPathPrefix": "Upstream files are recorded under their cw/ plugin-tree paths, which are verified complete at the pinned revision."
+  },
+  "files": [
+    {
+      "sourcePath": "cw/skills/creative-writing-modes/SKILL.md",
+      "destination": "resources/prose-modes.md",
+      "status": "planned",
+      "license": "Apache-2.0",
+      "notes": "Rewritten as the production modes of story-writing."
+    },
+    {
+      "sourcePath": "cw/skills/creative-writing-modes/resources/prose-modes.md",
+      "destination": "resources/prose-modes.md",
+      "status": "planned",
+      "license": "Apache-2.0",
+      "notes": "Mode material for story-writing; framework-specific orchestration removed."
+    },
+    {
+      "sourcePath": "cw/skills/creative-writing-craft/resources/prose-writing.md",
+      "destination": "resources/style.md",
+      "status": "planned",
+      "license": "Apache-2.0",
+      "notes": "Craft reference shared by writing and review."
+    },
+    {
+      "sourcePath": "cw/skills/creative-writing-craft/resources/scene-construction.md",
+      "destination": "resources/scene-craft.md",
+      "status": "planned",
+      "license": "Apache-2.0",
+      "notes": "Scene-craft reference shared by planning and writing."
+    },
+    {
+      "sourcePath": "cw/skills/creative-writing-craft/resources/style-analysis.md",
+      "destination": "resources/style.md",
+      "status": "planned",
+      "license": "Apache-2.0",
+      "notes": "Style analysis folded into the shared style reference."
+    },
+    {
+      "sourcePath": "cw/skills/story-review/resources/editorial-review.md",
+      "destination": "resources/review-levels.md",
+      "status": "planned",
+      "license": "Apache-2.0",
+      "notes": "Editorial pass method for story-review."
+    },
+    {
+      "sourcePath": "cw/skills/story-review/resources/developmental-edit.md",
+      "destination": "resources/review-levels.md",
+      "status": "planned",
+      "license": "Apache-2.0",
+      "notes": "Developmental pass method for story-review."
+    },
+    {
+      "sourcePath": "cw/skills/story-review/resources/line-edit.md",
+      "destination": "resources/review-levels.md",
+      "status": "planned",
+      "license": "Apache-2.0",
+      "notes": "Line-edit pass method for story-review; voice-preserving guidance retained, no mandatory economy rules."
+    },
+    {
+      "sourcePath": "cw/skills/story-review/resources/copyedit.md",
+      "destination": "resources/review-levels.md",
+      "status": "planned",
+      "license": "Apache-2.0",
+      "notes": "Copyedit pass method for story-review."
+    },
+    {
+      "sourcePath": "cw/skills/story-review/resources/proofreading.md",
+      "destination": "resources/review-levels.md",
+      "status": "planned",
+      "license": "Apache-2.0",
+      "notes": "Proofreading pass method for story-review."
+    },
+    {
+      "sourcePath": "cw/skills/story-planning/SKILL.md",
+      "destination": "resources/planning.md",
+      "status": "planned",
+      "license": "Apache-2.0",
+      "notes": "Planning workflow merged with the fork's plot, theme, discovery, and scene resources."
+    },
+    {
+      "sourcePath": "cw/skills/story-planning/resources/brainstorming.md",
+      "destination": "resources/discovery.md",
+      "status": "planned",
+      "license": "Apache-2.0",
+      "notes": "Brainstorming method adapted for discovery preparation."
+    },
+    {
+      "sourcePath": "cw/skills/story-planning/resources/brainstorming/chapter-planning.md",
+      "destination": "resources/planning.md",
+      "status": "planned",
+      "license": "Apache-2.0",
+      "notes": "Chapter planning guidance."
+    },
+    {
+      "sourcePath": "cw/skills/story-planning/resources/brainstorming/character-development.md",
+      "destination": "resources/character-development.md",
+      "status": "planned",
+      "license": "Apache-2.0",
+      "notes": "Character development reference for planning and story-world."
+    },
+    {
+      "sourcePath": "cw/skills/story-planning/resources/brainstorming/continuity-timeline.md",
+      "destination": "resources/planning.md",
+      "status": "planned",
+      "license": "Apache-2.0",
+      "notes": "Timeline planning guidance; superseded mechanics must yield to the fork's chronology model."
+    },
+    {
+      "sourcePath": "cw/skills/story-planning/resources/brainstorming/worldbuilding.md",
+      "destination": "resources/worldbuilding.md",
+      "status": "planned",
+      "license": "Apache-2.0",
+      "notes": "Worldbuilding reference for story-world."
+    },
+    {
+      "sourcePath": "cw/skills/story-planning/resources/creative-direction.md",
+      "destination": "resources/planning.md",
+      "status": "planned",
+      "license": "Apache-2.0",
+      "notes": "Creative direction guidance."
+    },
+    {
+      "sourcePath": "cw/skills/story-planning/resources/story-architecture.md",
+      "destination": "resources/planning.md",
+      "status": "planned",
+      "license": "Apache-2.0",
+      "notes": "Story architecture guidance."
+    },
+    {
+      "sourcePath": "cw/skills/story-planning/resources/story-architecture/arc-design.md",
+      "destination": "resources/planning.md",
+      "status": "planned",
+      "license": "Apache-2.0",
+      "notes": "Arc design guidance."
+    },
+    {
+      "sourcePath": "cw/skills/story-planning/resources/story-architecture/chapter-and-scene.md",
+      "destination": "resources/scene-craft.md",
+      "status": "planned",
+      "license": "Apache-2.0",
+      "notes": "Chapter and scene structure guidance."
+    },
+    {
+      "sourcePath": "cw/skills/story-planning/resources/story-architecture/structural-problems.md",
+      "destination": "resources/planning.md",
+      "status": "planned",
+      "license": "Apache-2.0",
+      "notes": "Structural problem diagnosis."
+    },
+    {
+      "sourcePath": "cw/skills/story-memory/SKILL.md",
+      "destination": "resources/memory-reconciliation.md",
+      "status": "planned",
+      "license": "Apache-2.0",
+      "notes": "Memory workflow rewritten against the fork's fact/decision/issue schema; retcon semantics corrected so an explicit retcon authorizes reconciliation but an experiment does not."
+    },
+    {
+      "sourcePath": "cw/skills/story-memory/resources/fact-extraction.md",
+      "destination": "resources/memory-reconciliation.md",
+      "status": "planned",
+      "license": "Apache-2.0",
+      "notes": "Evidence-based fact extraction method."
+    },
+    {
+      "sourcePath": "cw/skills/story-memory/resources/story-context.md",
+      "destination": "resources/memory-reconciliation.md",
+      "status": "planned",
+      "license": "Apache-2.0",
+      "notes": "Context selection method; feeds the shared context packet contract."
+    },
+    {
+      "sourcePath": "cw/skills/story-memory/resources/story-reference-writing.md",
+      "destination": "resources/memory-reconciliation.md",
+      "status": "planned",
+      "license": "Apache-2.0",
+      "notes": "Reference writing method."
+    },
+    {
+      "sourcePath": "cw/skills/story-memory/resources/story-reference-writing/reference-modes.md",
+      "destination": "resources/memory-reconciliation.md",
+      "status": "planned",
+      "license": "Apache-2.0",
+      "notes": "Reference modes detail."
+    },
+    {
+      "sourcePath": "cw/skills/story-memory/resources/writing-artifacts.md",
+      "destination": "resources/memory-reconciliation.md",
+      "status": "planned",
+      "license": "Apache-2.0",
+      "notes": "Artifact tracking adapted to the fork's record model."
+    },
+    {
+      "sourcePath": "cw/skills/story-memory/resources/writing-issues.md",
+      "destination": "resources/memory-reconciliation.md",
+      "status": "planned",
+      "license": "Apache-2.0",
+      "notes": "Issue tracking adapted to the fork's issue schema."
+    },
+    {
+      "sourcePath": "cw/skills/creative-research/SKILL.md",
+      "destination": "resources/research-methods.md",
+      "status": "planned",
+      "license": "Apache-2.0",
+      "notes": "Usable-detail research method merged with the fork's sourced research records."
+    },
+    {
+      "sourcePath": "cw/skills/writing-principles/SKILL.md",
+      "destination": "resources/review-levels.md",
+      "status": "planned",
+      "license": "Apache-2.0",
+      "notes": "Diagnostic guidance selected; mandatory punctuation preferences and universal economy rules removed."
+    },
+    {
+      "sourcePath": "cw/skills/writing-principles/resources/failure-modes.md",
+      "destination": "resources/review-levels.md",
+      "status": "planned",
+      "license": "Apache-2.0",
+      "notes": "Failure-mode diagnostics for review."
+    },
+    {
+      "sourcePath": "cw/skills/writing-principles/resources/citations.md",
+      "destination": "resources/research-methods.md",
+      "status": "planned",
+      "license": "Apache-2.0",
+      "notes": "Citation guidance merged into research methods."
+    },
+    {
+      "sourcePath": "cw/skills/character-sim/SKILL.md",
+      "destination": "resources/character-simulation.md",
+      "status": "planned",
+      "license": "Apache-2.0",
+      "notes": "Optional character simulation reference; never mandatory on every passage, no multi-critic loops."
+    },
+    {
+      "sourcePath": "cw/skills/reader-sim/SKILL.md",
+      "destination": "resources/reader-simulation.md",
+      "status": "planned",
+      "license": "Apache-2.0",
+      "notes": "Optional reader simulation reference; clean-boundary requirement made explicit."
+    },
+    {
+      "sourcePath": "cw/skills/llm-writing/SKILL.md",
+      "destination": "resources/style.md",
+      "status": "planned",
+      "license": "Apache-2.0",
+      "notes": "Intentional-language and scope-preservation guidance selected; disk-first and unrelated dependency requirements omitted."
+    }
+  ]
+}

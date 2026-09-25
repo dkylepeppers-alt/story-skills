@@ -13,6 +13,14 @@ describe("markdown utilities", () => {
     expect(wordCount("A map ![harbor chart](map.png) hung there.")).toBe(4);
   });
 
+  test("excludes scene and beat markers from word counts", () => {
+    expect(wordCount("<!-- story-scene: scn_7f83d6a2 -->\nShe arrived at dawn.")).toBe(4);
+    expect(wordCount("Before text.\n  <!-- story-beat: beat_key_handoff -->\nAfter text.")).toBe(4);
+    // A malformed marker is not an anchor: it is reported as a diagnostic and
+    // its words still count — nothing silently disappears from the prose.
+    expect(wordCount("<!-- story-scene: Not An Id --> counts as prose")).toBe(7);
+  });
+
   test("counts curly apostrophes, accents, and hyphenated words as single words", () => {
     expect(wordCount("don\u2019t stop")).toBe(2);
     expect(wordCount("na\u00efve caf\u00e9 \u00c9lodie")).toBe(3);

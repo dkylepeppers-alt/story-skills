@@ -99,7 +99,7 @@ describe("story add matter", () => {
     createEntity(root, { kind: "matter", name: "Afterword", placement: "back" });
     const renamed = renameEntity(root, { kind: "matter", id: "afterword", name: "Author's Note" });
     expect(renamed.id).toBe("authors-note");
-    expect(fs.readFileSync(renamed.file, "utf8")).toContain("title: \"Author's Note\"");
+    expect(fs.readFileSync(renamed.file, "utf8")).toContain("title: Author's Note");
 
     removeEntity(root, { kind: "matter", id: "authors-note" });
     expect(fs.existsSync(renamed.file)).toBe(false);

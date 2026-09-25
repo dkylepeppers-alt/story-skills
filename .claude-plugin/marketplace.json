@@ -1,5 +1,5 @@
 {
-  "name": "story-skills",
+  "name": "@dkylepeppers-alt/story-toolkit",
   "description": "A suite of cross-referenced skills for end-to-end story writing and revision powered by markdown",
   "owner": {
     "name": "Daniel Dewhurst",
@@ -7,7 +7,7 @@
   },
   "plugins": [
     {
-      "name": "story-skills",
+      "name": "@dkylepeppers-alt/story-toolkit",
       "source": {
         "source": "url",
         "url": "https://github.com/danjdewhurst/story-skills.git"

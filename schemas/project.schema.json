@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/dkylepeppers-alt/story-skills/schemas/project.schema.json",
+  "title": "Story Toolkit project record (story.md)",
+  "$comment": "Record schemas describe the persisted frontmatter of a story-toolkit project: kebab-case keys, format discriminator, schema-version 1. Unknown fields are rejected; project-specific metadata goes in extensions. Ids use type prefixes with opaque suffixes; prefix enforcement lives in the identity layer, not here.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "schema-version", "id", "type", "title"],
+  "properties": {
+    "format": { "const": "story-toolkit" },
+    "schema-version": { "const": 1 },
+    "id": { "$ref": "#/$defs/id" },
+    "type": { "const": "project" },
+    "title": { "type": "string", "minLength": 1 },
+    "premise": { "type": "string" },
+    "counter-premise": { "type": "string" },
+    "pov": { "type": "string" },
+    "tense": { "enum": ["past", "present", "future", "mixed"] },
+    "genre": { "type": "string" },
+    "sub-genre": { "type": "string" },
+    "setting-era": { "type": "string" },
+    "instructions": { "type": "array", "items": { "type": "string" } },
+    "style-sources": { "type": "array", "items": { "type": "string" } },
+    "series": { "type": "string" },
+    "book-number": { "type": "integer", "minimum": 1 },
+    "extensions": { "type": "object" }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*$" },
+    "source-ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "hash", "kind"],
+      "properties": {
+        "path": { "type": "string" },
+        "scene": { "type": "string" },
+        "beat": { "type": "string" },
+        "hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "kind": { "enum": ["manuscript", "author-decision", "research", "asset"] }
+      }
+    },
+    "cursor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scene", "side"],
+      "properties": {
+        "scene": { "type": "string" },
+        "beat": { "type": "string" },
+        "side": { "enum": ["before", "after"] }
+      }
+    },
+    "cursor-or-baseline": {
+      "oneOf": [
+        { "type": "string", "const": "baseline" },
+        { "$ref": "#/$defs/cursor" }
+      ]
+    }
+  }
+}

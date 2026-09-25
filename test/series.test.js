@@ -386,10 +386,10 @@ describe("series traversal limits", () => {
     const two = book(cwd, "Book Two", { follows: ["book-one"] });
     const storyPath = path.join(one, "story.md");
     const markdown = fs.readFileSync(storyPath, "utf8");
-    fs.writeFileSync(storyPath, markdown.replace("---\n", "---\nlogline: >\n  folded text\n"), "utf8");
+    fs.writeFileSync(storyPath, markdown.replace("---\n", "---\nlogline: \"bad \\q escape\"\n"), "utf8");
     const report = seriesReport(two);
     expect(report.ok).toBe(false);
-    expect(report.errors.join("\n")).toContain("../book-one: story.md: Unsupported frontmatter line");
+    expect(report.errors.join("\n")).toContain("../book-one: story.md: Invalid escape sequence");
     const cli = invoke(cwd, ["series", "--path", "book-two"]);
     expect(cli.code).toBe(1);
   });
