@@ -5,6 +5,7 @@ import { describe, expect, spyOn, test } from "bun:test";
 import { resolveRoot, runCli } from "../src/cli/dispatch.js";
 import { parseArgs } from "../src/options.js";
 import { StorageError } from "../src/contracts.js";
+import { createStoryProject } from "../src/story.js";
 import { memoryIo, makeTempDir } from "./helpers.js";
 import { makeProject } from "./support/project.js";
 import { discoverProject } from "../src/project/discover.js";
@@ -64,13 +65,15 @@ describe("invocation branches the result envelope has to classify", () => {
   });
 
   test("a legacy command that fails with output is wrapped instead of relabeled", () => {
-    const io = memoryIo(makeTempDir());
-    expect(runCli(["knowledge", "--format", "json"], io)).toBe(1);
+    const { root } = createStoryProject({ cwd: makeTempDir(), title: "Wrapped", force: false });
+    fs.writeFileSync(path.join(root, "continuity", "state.md"), "not frontmatter\n", "utf8");
+    const io = memoryIo(root);
+    expect(runCli(["validate", "--format", "json"], io)).toBe(1);
     const body = JSON.parse(io.output());
     expect(body.ok).toBe(false);
     expect(body.diagnostics[0].code).toBe("COMMAND_FAILED");
-    expect(body.diagnostics[0].message).toContain("Usage: story knowledge");
-    expect(io.error()).toContain("Usage: story knowledge");
+    expect(body.diagnostics[0].message).toContain("Project validation failed");
+    expect(io.error()).toContain("Project validation failed");
   });
 
   test("storage errors thrown into the CLI keep their exit class in text and json", async () => {

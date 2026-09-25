@@ -13,7 +13,8 @@ export function timelineCommand(ctx) {
   return legacyTimeline(ctx);
 }
 
-function isStoryToolkitProject(root) {
+/** True when story.md declares format story-toolkit. */
+export function isStoryToolkitProject(root) {
   try {
     const raw = fs.readFileSync(path.join(root, "story.md"), "utf8");
     return parseFrontmatter(raw, "story.md").data?.format === FORMAT;

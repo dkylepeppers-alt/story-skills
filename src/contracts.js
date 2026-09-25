@@ -186,7 +186,7 @@ export class StorageError extends Error {
 // loadProject(root);                         // Promise<Project>            — src/project/load.js
 // writeTransaction(root, writes, options);   // Promise<MutationResult>     — src/storage/transaction.js
 // buildChronology(project);                  // Chronology with compare(a,b) — src/state/chronology.js
-// resolveState(project, cursor);             // { facts, conflicts, unresolved } — Task 5
+// resolveState(project, cursor);             // { facts, conflicts, unresolved } — src/state/facts.js
 // buildContext(project, request);            // ContextPacket               — Task 7
 // compareRevision(project, baseline, scope); // ChangeReport                — Task 8
 // analyzeImpact(project, change);            // ImpactReport                — Task 8

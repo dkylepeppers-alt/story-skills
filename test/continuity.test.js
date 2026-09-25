@@ -11,7 +11,9 @@ import {
   validateLinks,
   validateProject
 } from "../src/story.js";
+import { resolveState } from "../src/state/facts.js";
 import { makeTempDir, writeMarkdown } from "./helpers.js";
+import { makeProject } from "./support/project.js";
 
 function writeChapter(root, number, frontmatter) {
   writeMarkdown(path.join(root, "chapters", `chapter-${String(number).padStart(2, "0")}.md`), `
@@ -425,5 +427,42 @@ knowledge-state:
       "continuity/state.md knowledge-state[3] fact Not Kebab must be a kebab-case id",
       "continuity/state.md knowledge-state[4] fact (empty) must be a kebab-case id"
     ]);
+  });
+});
+
+// Story-toolkit durable state: the schema v2 contradictions above become
+// temporal fact conflicts resolved at a story cursor.
+describe("story-toolkit durable state", () => {
+  async function durableProject() {
+    const p = await makeProject();
+    await p.addEntity({ id: "chr_ana", type: "character", name: "Ana" });
+    await p.addEntity({ id: "loc_mill", type: "location", name: "Mill" });
+    await p.addEntity({ id: "fac_watch", type: "faction", name: "Watch" });
+    await p.addEntity({ id: "fac_guild", type: "faction", name: "Guild" });
+    await p.addScene({ id: "scn_mill", title: "Mill" });
+    p.write("chapters/one.md", `${p.read("chapters/one.md")}Ana stands in the mill and on the pier.\n`);
+    return p;
+  }
+
+  test("a character in two places at once is a conflict, not last-file-wins", async () => {
+    const p = await durableProject();
+    const sources = [p.source("scn_mill")];
+    await p.addFact({ id: "fact_ana_mill", subject: "chr_ana", predicate: "location", value: "loc_mill", sources });
+    await p.addFact({ id: "fact_ana_pier", subject: "chr_ana", predicate: "location", value: "the pier", sources });
+    const state = resolveState(await p.load(), p.exit("scn_mill"));
+    expect(state.conflicts.map((item) => [item.subject, item.predicate, item.factIds])).toEqual([
+      ["chr_ana", "location", ["fact_ana_mill", "fact_ana_pier"]]
+    ]);
+    expect(state.facts.map((item) => item.id)).toEqual(["fact_ana_mill", "fact_ana_pier"]);
+  });
+
+  test("additive affiliations are consistent", async () => {
+    const p = await durableProject();
+    const sources = [p.source("scn_mill")];
+    await p.addFact({ id: "fact_watch", subject: "chr_ana", predicate: "affiliation", value: "fac_watch", sources });
+    await p.addFact({ id: "fact_guild", subject: "chr_ana", predicate: "affiliation", value: "fac_guild", sources });
+    const state = resolveState(await p.load(), p.exit("scn_mill"));
+    expect(state.conflicts).toEqual([]);
+    expect(state.diagnostics).toEqual([]);
   });
 });

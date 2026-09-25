@@ -21,7 +21,7 @@ function slash(value) {
   return value.split(path.sep).join("/");
 }
 
-function openProject(root, command) {
+export function openProject(root, command) {
   const story = path.join(root, "story.md");
   if (!fs.existsSync(story) || !fs.statSync(story).isFile()) {
     return { error: failure(command, `No story project at ${root}: missing story.md`, "PROJECT_NOT_FOUND", 2) };
@@ -73,7 +73,7 @@ function directoryNames(root, directory) {
   return fs.readdirSync(absolute);
 }
 
-function commit(root, writes, dryRun) {
+export function commit(root, writes, dryRun) {
   if (writes.length === 0) return [];
   if (dryRun) {
     for (const write of writes) {
@@ -106,7 +106,7 @@ const BLOCKING_LOAD_CODES = new Set([
   "UNKNOWN_RECORD_TYPE"
 ]);
 
-function loadErrorResult(command, project, targetId) {
+export function loadErrorResult(command, project, targetId) {
   const diagnostics = project.diagnostics.filter((item) => BLOCKING_LOAD_CODES.has(item.code));
   if (diagnostics.length === 0) return null;
   if (targetId !== undefined) {
@@ -120,7 +120,7 @@ function loadErrorResult(command, project, targetId) {
   };
 }
 
-function fromStorageError(command, error) {
+export function fromStorageError(command, error) {
   const code = error instanceof StorageError ? error.code : "OPERATION_FAILED";
   const exitCode = code === "STALE_SOURCE" || code === "LOCKED" ? 3 : 4;
   return failure(command, error.message, code, exitCode);

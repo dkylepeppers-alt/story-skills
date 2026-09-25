@@ -11,6 +11,8 @@ import {
   renameEntityCommand,
   showEntityCommand
 } from "./cli/handlers/entity.js";
+import { addFactCommand, listFactsCommand, retractFactCommand } from "./cli/handlers/fact.js";
+import { knowledgeCommand } from "./cli/handlers/knowledge.js";
 import { importToolkitCommand, initToolkitCommand } from "./cli/handlers/project.js";
 import { timelineCommand } from "./cli/handlers/timeline.js";
 import { defineCommands } from "./cli/registry.js";
@@ -25,7 +27,6 @@ import {
   formatActionReport,
   formatDoctorReport,
   formatProjectReport,
-  knowledgeAtChapter,
   migrateProject,
   projectActions,
   projectProgress,
@@ -166,26 +167,27 @@ const COMMAND_LIST = [
   {
     name: "knowledge",
     usage: "knowledge <id>",
-    summary: ["List what a character knew at a chapter; requires --at"],
-    project: "flag",
-    run({ parsed, io, root }) {
-      const characterId = parsed.positionals[1];
-      const atChapterId = parsed.options.at;
-      if (!characterId || typeof atChapterId !== "string") {
-        io.stderr.write("Usage: story knowledge <character-id> --at <chapter-id> [--path <project>]\n");
-        return 1;
-      }
-      const entries = knowledgeAtChapter(root(), characterId, atChapterId);
-      if (entries.length === 0) {
-        io.stdout.write(`No recorded knowledge for ${characterId} at ${atChapterId}\n`);
-        return 0;
-      }
-      for (const entry of entries) {
-        const source = entry.learnedIn === "" ? "pre-existing knowledge" : `learned in ${entry.learnedIn}`;
-        io.stdout.write(`- ${entry.knows} (${source})\n`);
-      }
-      return 0;
-    }
+    summary: [
+      "List what a character knows and believes at a",
+      "scene cursor (--scene, --beat, --side); schema v2",
+      "uses a chapter (--at)"
+    ],
+    project: "discover",
+    returnsResult: true,
+    strictOptions: true,
+    enforceArgs: true,
+    args: [{ name: "id", required: true }],
+    optionSchema: [
+      { name: "project" },
+      { name: "path" },
+      { name: "format", values: ["text", "json"] },
+      { name: "at" },
+      { name: "scene" },
+      { name: "beat" },
+      { name: "side", values: ["before", "after"] }
+    ],
+    examples: ["story knowledge chr_ada --scene scn_cellar --beat beat_confession --side after"],
+    run: knowledgeCommand
   },
   {
     name: "compare",
@@ -472,6 +474,69 @@ const COMMAND_LIST = [
     ],
     examples: ["story entity show chr_ada"],
     run: showEntityCommand
+  },
+  {
+    name: "fact",
+    path: ["fact", "add"],
+    usage: "fact add --data <json-file>",
+    summary: ["Add a sourced fact from schema-validated data"],
+    project: "discover",
+    mutates: true,
+    returnsResult: true,
+    strictOptions: true,
+    enforceArgs: true,
+    optionSchema: [
+      { name: "project" },
+      { name: "path" },
+      { name: "format", values: ["text", "json"] },
+      { name: "dry-run" },
+      { name: "data", required: true }
+    ],
+    examples: ["story fact add --data fact.json"],
+    run: addFactCommand
+  },
+  {
+    name: "fact",
+    path: ["fact", "list"],
+    usage: "fact list",
+    summary: ["List established facts; --scene shows what applies"],
+    project: "discover",
+    mutates: false,
+    returnsResult: true,
+    strictOptions: true,
+    enforceArgs: true,
+    optionSchema: [
+      { name: "project" },
+      { name: "path" },
+      { name: "format", values: ["text", "json"] },
+      { name: "scene" },
+      { name: "beat" },
+      { name: "side", values: ["before", "after"] },
+      { name: "include-inactive" },
+      { name: "include-work" }
+    ],
+    examples: ["story fact list --scene scn_cellar --side after"],
+    run: listFactsCommand
+  },
+  {
+    name: "fact",
+    path: ["fact", "retract"],
+    usage: "fact retract <id>",
+    summary: ["Retract a proposed or established fact"],
+    project: "discover",
+    mutates: true,
+    returnsResult: true,
+    strictOptions: true,
+    enforceArgs: true,
+    args: [{ name: "id", required: true }],
+    optionSchema: [
+      { name: "project" },
+      { name: "path" },
+      { name: "format", values: ["text", "json"] },
+      { name: "dry-run" }
+    ],
+    examples: ["story fact retract fact_key_handoff"],
+    run: retractFactCommand
   }
 ];
 

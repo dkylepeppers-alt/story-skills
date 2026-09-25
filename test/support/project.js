@@ -151,7 +151,15 @@ export async function makeProject(options = {}) {
     },
     entry: (sceneId) => ({ sceneId, side: "before" }),
     exit: (sceneId) => ({ sceneId, side: "after" }),
-    cursor: (sceneId, beatId, side) => ({ sceneId, beatId, side })
+    cursor: (sceneId, beatId, side) => ({ sceneId, beatId, side }),
+    // A manuscript SourceRef over the current bytes of a scene or beat span.
+    source: (sceneId, beatId, rel = "chapters/one.md") => {
+      const ref = { path: rel, scene: sceneId };
+      if (beatId) ref.beat = beatId;
+      ref.hash = sourceHash(root, { path: rel, sceneId, beatId });
+      ref.kind = "manuscript";
+      return ref;
+    }
   };
 
   return p;
@@ -199,24 +207,50 @@ export async function makeChronologyFixture() {
   return p;
 }
 
+// One cellar scene with three beats. Zoë takes the key at beat_handoff, Ada
+// learns it at beat_confession, and Ada's false belief that the key is lost
+// is established from beat_arrival. Every fact carries a real source hash.
 export async function makeKnowledgeFixture() {
   const p = await makeProject();
   await p.addEntity({ id: "chr_zoe", type: "character", name: "Zoë Voss" });
+  await p.addEntity({ id: "chr_ada", type: "character", name: "Ada Quill" });
   await p.addEntity({ id: "obj_brass_key", type: "object", name: "Brass Key" });
   await p.addScene({ id: "scn_cellar", title: "Cellar" });
+  const marker = "<!-- story-scene: scn_cellar -->\n";
+  p.write("chapters/one.md", p.read("chapters/one.md").replace(marker, [
+    marker,
+    "<!-- story-beat: beat_arrival -->\n",
+    "Ada finds the cellar door open and decides the key is lost.\n",
+    "<!-- story-beat: beat_handoff -->\n",
+    "Zoë slips the brass key into her coat.\n",
+    "<!-- story-beat: beat_confession -->\n",
+    "“I took it,” Zoë says.\n"
+  ].join("")));
   await p.addFact({
     id: "fact_key_handoff",
-    kind: "knowledge",
-    subject: "chr_zoe",
+    subject: "obj_brass_key",
     predicate: "holder",
-    value: "obj_brass_key",
-    "valid-from": { scene: "scn_cellar", side: "after" },
-    sources: [{
-      path: "chapters/one.md",
-      scene: "scn_cellar",
-      hash: sourceHash(p.root, { path: "chapters/one.md", sceneId: "scn_cellar" }),
-      kind: "manuscript"
-    }]
+    value: "chr_zoe",
+    "valid-from": { scene: "scn_cellar", beat: "beat_handoff", side: "after" },
+    sources: [p.source("scn_cellar", "beat_handoff")]
+  });
+  await p.addFact({
+    id: "fact_ada_learns",
+    kind: "knowledge",
+    subject: "chr_ada",
+    predicate: "knows",
+    value: "fact_key_handoff",
+    "valid-from": { scene: "scn_cellar", beat: "beat_confession", side: "after" },
+    sources: [p.source("scn_cellar", "beat_confession")]
+  });
+  await p.addFact({
+    id: "fact_false_belief",
+    kind: "belief",
+    subject: "chr_ada",
+    predicate: "believes",
+    value: "The brass key is lost",
+    "valid-from": { scene: "scn_cellar", beat: "beat_arrival", side: "after" },
+    sources: [p.source("scn_cellar", "beat_arrival")]
   });
   return p;
 }
