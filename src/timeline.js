@@ -1,9 +1,11 @@
 import path from "node:path";
 import { parseClockDate, parseClockTime } from "./continuity.js";
 
-// Read-only views over the project: story events in chronological order,
-// POV balance, and each character's presence across chapters. Nothing here
-// is a finding; `story continuity` owns the clock checks.
+// Schema v2 story-time report: dated scenes, POV balance, and character
+// presence. Story-toolkit projects do not use this linear dated sequence.
+// Their reading order and partial story order live in src/state/chronology.js,
+// and `unordered` stays explicit when a pair cannot be placed. `story
+// continuity` still owns the schema v2 clock checks.
 
 export function buildTimeline(project) {
   const chapters = [...project.chapters].sort((left, right) => left.number - right.number || left.id.localeCompare(right.id, "en"));

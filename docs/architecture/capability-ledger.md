@@ -72,6 +72,16 @@ references, including fact cursors and manuscript scene markers, block removal
 with no writes. `remove --policy refuse` reports dependencies and writes nothing.
 Both blocked removals exit 1.
 
+Task 4 models story-toolkit scene and beat chronology apart from reading
+order. Chapter markers supply each scene's single span and its beat order.
+`story timeline` on a `format: story-toolkit` project returns `readingOrder`
+and a partial `storyOrder` (constraints, cycles, and scenes that are not
+placed). It does not print ambiguous branches or cycles as a linear sequence.
+Comparison results are `before`, `equal`, `after`, or `unordered`. Schema v2
+`story timeline` still prints the dated scene report, POV balance, and
+character presence from `src/timeline.js`. Custody and clock checks in
+`src/continuity.js` are unchanged.
+
 ## 2. CLI options
 
 Baseline source of truth: `src/options.js` (68 registered options: 60 with

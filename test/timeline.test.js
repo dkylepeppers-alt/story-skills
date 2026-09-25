@@ -5,6 +5,7 @@ import { runCli } from "../src/cli.js";
 import { formatTimeline } from "../src/timeline.js";
 import { createEntity, createStoryProject, storyTimeline } from "../src/story.js";
 import { makeTempDir, memoryIo, writeMarkdown } from "./helpers.js";
+import { makeChronologyFixture, makeProject } from "./support/project.js";
 
 function invoke(cwd, argv) {
   const io = memoryIo(cwd);
@@ -145,11 +146,76 @@ describe("story timeline", () => {
     expect(invoke(cwd, ["timeline", root]).out).toContain("Timeline: 0 dated, 1 undated");
   });
 
+  test("schema v2 timeline --json is one envelope", () => {
+    const { root, cwd } = timelineProject();
+    const result = invoke(cwd, ["timeline", "--json", "--path", root]);
+
+    expect(result.code).toBe(0);
+    expect(result.out.includes("\n")).toBe(false);
+    const parsed = JSON.parse(result.out);
+    expect(result.out).toBe(JSON.stringify(parsed));
+    expect(parsed.command).toBe("timeline");
+    expect(parsed.data.format).toBe("schema-v2");
+    expect(parsed.data.chronology.map((entry) => entry.id)).toContain("chapter-02-scene-01");
+    expect(result.err).toBe("story: timeline\n");
+    expect(result.err.includes(result.out)).toBe(false);
+  });
+
   test("parse errors fail the command", () => {
     const { root, cwd } = timelineProject();
     fs.writeFileSync(path.join(root, "chapters", "chapter-09.md"), "no frontmatter", "utf8");
     const result = invoke(cwd, ["timeline", "--path", root]);
     expect(result.code).toBe(1);
     expect(result.err).toContain("chapters/chapter-09.md");
+  });
+});
+
+describe("story-toolkit timeline", () => {
+  test("timeline --json stdout purity", async () => {
+    const p = await makeChronologyFixture();
+    const result = invoke(p.root, ["timeline", "--json"]);
+
+    expect(result.code).toBe(0);
+    expect(result.out.includes("\n")).toBe(false);
+    const parsed = JSON.parse(result.out);
+    expect(result.out).toBe(JSON.stringify(parsed));
+    expect(parsed).toMatchObject({ apiVersion: 1, command: "timeline", ok: true, writes: [] });
+    expect(Array.isArray(parsed.data.readingOrder)).toBe(true);
+    expect(Array.isArray(parsed.data.storyOrder)).toBe(false);
+    const reading = parsed.data.readingOrder.map((entry) => entry.sceneId);
+    expect(reading.indexOf("scn_opening")).toBeLessThan(reading.indexOf("scn_flashback"));
+    expect(parsed.data.storyOrder.constraints).toEqual(expect.arrayContaining([
+      expect.objectContaining({ earlier: "scn_flashback", later: "scn_opening", reason: "after" })
+    ]));
+    expect(parsed.data.storyOrder.unplaced).toContain("scn_undated");
+    expect(parsed.data.storyOrder.sequence).toBeUndefined();
+    expect(result.err.includes(result.out)).toBe(false);
+    expect(result.err).toBe("story: timeline\n");
+  });
+
+  test("timeline text keeps reading order apart from partial story order", async () => {
+    const p = await makeChronologyFixture();
+    const result = invoke(p.root, ["timeline"]);
+    expect(result.code).toBe(0);
+    expect(result.out).toContain("Reading order:");
+    expect(result.out).toContain("scn_flashback before scn_opening (after)");
+    expect(result.out).toContain("Not placed in story order:\n- scn_undated");
+    const story = result.out.split("Story order")[1];
+    expect(story).not.toMatch(/^- \d+\. /m);
+  });
+
+  test("a chronology cycle is a diagnostic, not a linear story sequence", async () => {
+    const p = await makeProject();
+    await p.addScene({ id: "scn_a", title: "A", chronology: { after: ["scn_c"] } });
+    await p.addScene({ id: "scn_b", title: "B", chronology: { after: ["scn_a"] } });
+    await p.addScene({ id: "scn_c", title: "C", chronology: { after: ["scn_b"] } });
+    const result = invoke(p.root, ["timeline", "--json"]);
+    expect(result.code).toBe(1);
+    expect(result.out.includes("\n")).toBe(false);
+    const parsed = JSON.parse(result.out);
+    expect(parsed.ok).toBe(false);
+    expect(parsed.diagnostics.map((item) => item.code)).toContain("CYCLE");
+    expect(Array.isArray(parsed.data.storyOrder)).toBe(false);
+    expect(parsed.data.storyOrder.cyclic.flat().sort()).toEqual(["scn_a", "scn_b", "scn_c"]);
   });
 });
