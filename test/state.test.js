@@ -387,9 +387,9 @@ describe("resolveState", () => {
     fs.cpSync(p.root, snapshot, { recursive: true });
     await setRecordField(p.root, "fact_key_handoff", "status", "retracted");
     const at = p.exit("scn_cellar");
-    expect(ids(resolveState(await p.load(), at).facts)).toEqual(["fact_ada_learns", "fact_false_belief"]);
+    expect(ids(resolveState(await p.load(), at).facts)).toEqual(["fact_ada_learns", "fact_false_belief", "fact_later_reveal"]);
     expect(ids(resolveState(await loadProject(snapshot), at).facts))
-      .toEqual(["fact_ada_learns", "fact_false_belief", "fact_key_handoff"]);
+      .toEqual(["fact_ada_learns", "fact_false_belief", "fact_key_handoff", "fact_later_reveal"]);
     fs.rmSync(snapshot, { recursive: true, force: true });
   });
 });
@@ -645,13 +645,14 @@ describe("fact list", () => {
     const p = await listProject();
     const plain = json(p.root, ["fact", "list"]);
     expect(plain.code).toBe(0);
-    expect(plain.parsed.data.facts.map((f) => f.id)).toEqual(["fact_ada_learns", "fact_false_belief", "fact_key_handoff"]);
+    expect(plain.parsed.data.facts.map((f) => f.id)).toEqual(["fact_ada_learns", "fact_false_belief", "fact_key_handoff", "fact_later_reveal"]);
     const all = json(p.root, ["fact", "list", "--include-inactive", "--include-work"]);
     expect(all.parsed.data.facts.map((f) => [f.id, f.status, f.active, f.location])).toEqual([
       ["fact_ada_learns", "established", true, "facts"],
       ["fact_false_belief", "established", true, "facts"],
       ["fact_idea", "proposed", false, "facts"],
       ["fact_key_handoff", "established", true, "facts"],
+      ["fact_later_reveal", "established", true, "facts"],
       ["fact_old", "superseded", false, "facts"],
       ["fact_draft", "proposed", false, "work"]
     ]);
@@ -673,6 +674,7 @@ describe("fact list", () => {
       ["fact_false_belief", true],
       ["fact_idea", false],
       ["fact_key_handoff", true],
+      ["fact_later_reveal", false],
       ["fact_old", false],
       ["fact_draft", false]
     ]);

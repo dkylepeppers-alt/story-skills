@@ -120,25 +120,39 @@ export class StorageError extends Error {
  */
 
 /**
+ * A context request (Task 7, `src/context/build.js`). Scene tasks (`draft`,
+ * `revise`, `review`, `image`) need `target`; the other tasks work at project
+ * level and take an optional target. `audience: "reader"` is a reader
+ * simulation: task `review`, `target` is the reading boundary, and no
+ * `include` ids.
+ *
  * @typedef {object} ContextRequest
  * @property {("plan"|"draft"|"revise"|"review"|"world"|"memory"|"research"|"series"|"image"|"publish")} task
- * @property {string} [sceneId]
- * @property {string} [beatId]
- * @property {Cursor} [cursor]
- * @property {("reader"|string)} [audience]
- * @property {object} [readerBoundary]
- * @property {string[]} [constraints]
- * @property {string[]} [ids]
- * @property {number} [maxBytes]
+ * @property {Cursor} [target] `{ sceneId, beatId?, side }`.
+ * @property {("writer"|"reader")} [audience] Defaults to `writer`.
+ * @property {string[]} [constraints] Caller constraints, always required.
+ * @property {string[]} [include] Record ids to retrieve as required material.
+ * @property {number} [maxBytes] UTF-8 byte budget for the serialized packet; default 48,000.
  */
 
 /**
+ * A context packet: selected source material, never a CLI-written summary.
+ * Every item carries `{ id, kind, reason, required, sources, content }`.
+ * `impact` holds later material for revision checks, apart from the writer's
+ * in-scene knowledge. `required` is filled only when required material cannot
+ * fit, together with a `CONTEXT_BUDGET_EXCEEDED` diagnostic.
+ *
  * @typedef {object} ContextPacket
- * @property {string[]} constraints
- * @property {{ item: object, reason: string }[]} selected
- * @property {object} state
+ * @property {string|null} operation
+ * @property {("writer"|"reader")} audience
+ * @property {Cursor|null} target
+ * @property {number} maxBytes
+ * @property {number} bytes UTF-8 bytes of the whole serialized packet.
+ * @property {object[]} items
+ * @property {object[]} impact
+ * @property {{ id: string, kind: string, reason: string, retrieval: string, bytes: number }[]} omissions
+ * @property {object[]} required
  * @property {Diagnostic[]} diagnostics
- * @property {{ description: string }[]} omissions
  */
 
 /**
@@ -187,7 +201,7 @@ export class StorageError extends Error {
 // writeTransaction(root, writes, options);   // Promise<MutationResult>     — src/storage/transaction.js
 // buildChronology(project);                  // Chronology with compare(a,b) — src/state/chronology.js
 // resolveState(project, cursor);             // { facts, conflicts, unresolved } — src/state/facts.js
-// buildContext(project, request);            // ContextPacket               — Task 7
+// buildContext(project, request);            // ContextPacket               — src/context/build.js
 // compareRevision(project, baseline, scope); // ChangeReport                — Task 8
 // analyzeImpact(project, change);            // ImpactReport                — Task 8
 // validateProposal(project, proposal);       // { ok, diagnostics, writes } — Task 8
