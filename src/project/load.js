@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { parseFrontmatter } from "../storage/document.js";
 import { sha256Hex } from "../storage/hash.js";
+import { danglingReferenceDiagnostics } from "./references.js";
 import { validateRecord } from "./schema.js";
 
 const RECORD_DIRECTORIES = [
@@ -32,18 +33,28 @@ function diagnostic(code, message, action) {
  * overwrite later edits.
  */
 export async function loadProject(root) {
+  return loadProjectSync(root);
+}
+
+export function loadProjectSync(root) {
   const diagnostics = [];
   const records = new Map();
+  const unindexed = [];
 
   function addRecord(relativePath) {
     const entry = loadRecord(root, relativePath, diagnostics);
     if (!entry) return;
+    if (!entry.valid) {
+      unindexed.push(entry);
+      return;
+    }
     if (records.has(entry.id)) {
       diagnostics.push(diagnostic(
         "DUPLICATE_RECORD_ID",
         `Record id ${entry.id} is already used by ${records.get(entry.id).path}`,
         "Ids are unique across the project; give one of the records a fresh explicit id."
       ));
+      unindexed.push(entry);
       return;
     }
     records.set(entry.id, entry);
@@ -92,7 +103,8 @@ export async function loadProject(root) {
   }
   for (const directory of RECORD_DIRECTORIES) walk(directory, true);
 
-  return { root, records, diagnostics };
+  diagnostics.push(...danglingReferenceDiagnostics({ records, unindexed }));
+  return { root, records, unindexed, diagnostics };
 }
 
 function loadRecord(root, relativePath, diagnostics) {
@@ -129,15 +141,15 @@ function loadRecord(root, relativePath, diagnostics) {
   for (const finding of findings) {
     diagnostics.push({ ...finding, message: `${relativePath}: ${finding.message}` });
   }
-  if (findings.length > 0 || typeof record.id !== "string") {
-    return null;
-  }
+  if (typeof record.id !== "string") return null;
 
   return {
     id: record.id,
     type: record.type,
     path: relativePath,
     hash: sha256Hex(bytes),
-    record
+    record,
+    body: parsed.body,
+    valid: findings.length === 0
   };
 }

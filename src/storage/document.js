@@ -72,11 +72,18 @@ export function replaceFrontmatter(markdown, data, bodyOverride) {
       lines.push(block.line);
       continue;
     }
-    if (!Object.prototype.hasOwnProperty.call(data, block.key) || data[block.key] === undefined) {
+    if (!Object.prototype.hasOwnProperty.call(data, block.key)) {
+      continue;
+    }
+    const value = data[block.key];
+    if (value === undefined) {
+      // Undefined removes the key. The serializer owns that decision so a
+      // future encoding of "absent" stays in one place.
+      const removed = serializeEntry(block.key, value, block);
+      if (removed.length > 0) lines.push(...removed);
       continue;
     }
     written.add(block.key);
-    const value = data[block.key];
     if (isDeepEqual(current[block.key], value)) {
       lines.push(...block.lines);
     } else {

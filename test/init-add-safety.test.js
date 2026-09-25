@@ -29,7 +29,7 @@ describe("init", () => {
     expect(() => createStoryProject({ cwd, title: "東京物語", dir: "tk" })).toThrow("Cannot derive a story id");
     expect(fs.existsSync(path.join(cwd, "tk"))).toBe(false);
     const result = invoke(cwd, ["init", "東京物語", "--dir", "tk"]);
-    expect(result.code).toBe(1);
+    expect(result.code).toBe(2);
   });
 
   test("--force adds missing starter files and never overwrites existing ones", () => {

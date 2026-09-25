@@ -1,8 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
+import { runCli } from "../src/cli.js";
+import { loadProject } from "../src/project/load.js";
 import { createEntity, createStoryProject, removeEntity, renameEntity } from "../src/story.js";
-import { makeTempDir, writeMarkdown } from "./helpers.js";
+import { makeTempDir, memoryIo, writeMarkdown } from "./helpers.js";
+import { makeProject } from "./support/project.js";
 
 function project(title) {
   return createStoryProject({ cwd: makeTempDir(), title, force: false }).root;
@@ -170,5 +173,84 @@ knowledge-state:
     renameEntity(root, { kind: "character", id: "lord-maren", name: "Maren Two" });
 
     expect(fs.readFileSync(planPath, "utf8")).toBe("# Plan\n\nSee [Maren](../characters/maren-two.md) and [maren-two](/characters/maren-two.md#bio).\n[web](https://example.com/lord-maren.md) [top](#lord-maren) [bad](%E0%A4%A.md)\n");
+  });
+});
+
+describe("story-toolkit remove policy", () => {
+  test("remove --policy detach refuses when a reference is required", async () => {
+    const p = await makeProject();
+    await p.addEntity({ id: "chr_ada", type: "character", name: "Ada" });
+    await p.addFact({ id: "fact_ada_home", subject: "chr_ada", predicate: "location", value: "the pier" });
+    await p.addFact({ id: "fact_bee_sees", subject: "chr_bee", predicate: "sees", value: "chr_ada" });
+    const before = snapshot(p.root);
+    const io = memoryIo(p.root);
+    const code = runCli(["entity", "remove", "chr_ada", "--policy", "detach", "--format", "json"], io);
+    const stdout = io.output();
+
+    expect(code).toBe(1);
+    expect(stdout).toBe(JSON.stringify(JSON.parse(stdout)));
+    const parsed = JSON.parse(stdout);
+    expect(parsed.ok).toBe(false);
+    expect(parsed.diagnostics.map((item) => item.code)).toEqual(["REQUIRED_REFERENCE", "REQUIRED_REFERENCE"]);
+    expect(parsed.diagnostics.map((item) => item.recordIds).flat()).toEqual(["chr_ada", "fact_ada_home", "chr_ada", "fact_bee_sees"]);
+    expect(parsed.writes).toEqual([]);
+    expect(snapshot(p.root)).toEqual(before);
+    const project = await p.load();
+    expect(project.records.get("fact_ada_home").record.subject).toBe("chr_ada");
+    expect(project.records.get("fact_bee_sees").record.value).toBe("chr_ada");
+    expect(project.records.has("chr_ada")).toBe(true);
+  });
+
+  test("remove --policy detach refuses a required chapter-id", async () => {
+    const p = await makeProject();
+    await p.addScene({ id: "scn_door", title: "Door" });
+    const before = snapshot(p.root);
+    const io = memoryIo(p.root);
+
+    expect(runCli(["entity", "remove", "chp_one", "--policy", "detach", "--format", "json"], io)).toBe(1);
+    const parsed = JSON.parse(io.output());
+    expect(parsed.ok).toBe(false);
+    expect(parsed.diagnostics[0].code).toBe("REQUIRED_REFERENCE");
+    expect(parsed.diagnostics[0].message).toContain("chapter-id");
+    expect(parsed.writes).toEqual([]);
+    expect(snapshot(p.root)).toEqual(before);
+    expect((await p.load()).records.get("scn_door").record["chapter-id"]).toBe("chp_one");
+  });
+
+  test("remove --policy detach clears optional cast without rewriting prose", async () => {
+    const p = await makeProject();
+    await p.addEntity({ id: "chr_ada", type: "character", name: "Ada" });
+    await p.addEntity({ id: "chr_bee", type: "character", name: "Bee" });
+    await p.addScene({ id: "scn_door", title: "Door", cast: ["chr_ada", "chr_bee"] });
+    const prose = p.read("chapters/one.md");
+    const io = memoryIo(p.root);
+
+    expect(runCli(["entity", "remove", "chr_ada", "--policy", "detach", "--format", "json"], io)).toBe(0);
+    const parsed = JSON.parse(io.output());
+    expect(parsed.ok).toBe(true);
+    expect(parsed.diagnostics.map((item) => item.code)).toEqual(["REFERENCE_DETACHED"]);
+    expect(parsed.diagnostics[0].severity).toBe("warning");
+    expect(fs.existsSync(path.join(p.root, "characters", "chr_ada.md"))).toBe(false);
+    expect(p.read("chapters/one.md")).toBe(prose);
+    const project = await loadProject(p.root);
+    expect(project.diagnostics.filter((item) => item.code === "SCHEMA_VIOLATION")).toEqual([]);
+    expect(project.records.get("scn_door").record.cast).toEqual(["chr_bee"]);
+    expect(project.records.has("chr_ada")).toBe(false);
+  });
+
+  test("remove --policy refuse reports dependencies and writes nothing", async () => {
+    const p = await makeProject();
+    await p.addEntity({ id: "chr_ada", type: "character", name: "Ada" });
+    await p.addScene({ id: "scn_door", title: "Door", cast: ["chr_ada"] });
+    const before = snapshot(p.root);
+    const io = memoryIo(p.root);
+
+    expect(runCli(["entity", "remove", "chr_ada", "--policy", "refuse", "--format", "json"], io)).toBe(1);
+    const parsed = JSON.parse(io.output());
+    expect(parsed.ok).toBe(false);
+    expect(parsed.diagnostics[0].code).toBe("REFERENCE_PRESENT");
+    expect(parsed.writes).toEqual([]);
+    expect(snapshot(p.root)).toEqual(before);
+    expect(fs.existsSync(path.join(p.root, "characters", "chr_ada.md"))).toBe(true);
   });
 });

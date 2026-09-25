@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { importMarkdown } from "./project/import.js";
 import { parseFrontmatter, stringifyFrontmatter } from "./frontmatter.js";
 import { titleCaseSlug, wordCount } from "./markdown.js";
 import { createStoryProject, reindexProject, writeFile } from "./story.js";
@@ -32,6 +33,10 @@ function assertImportFileSize(filePath) {
   if (size > MAX_IMPORT_FILE_BYTES) {
     throw new Error('Refusing to import oversized file ' + filePath + ': ' + size + ' bytes exceeds the ' + MAX_IMPORT_FILE_BYTES + ' byte limit');
   }
+}
+
+export function importToolkitManuscript(options) {
+  return importMarkdown(options);
 }
 
 export function importManuscript(options) {

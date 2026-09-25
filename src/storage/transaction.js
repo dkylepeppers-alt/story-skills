@@ -32,6 +32,10 @@ const ACTIONS = new Set(["create", "replace", "remove"]);
  * journaling, or writing anything.
  */
 export async function writeTransaction(root, writes, options = {}) {
+  return writeTransactionSync(root, writes, options);
+}
+
+export function writeTransactionSync(root, writes, options = {}) {
   if (!Array.isArray(writes) || writes.length === 0) {
     throw new StorageError("INVALID_WRITE", "A transaction needs a non-empty array of writes");
   }
@@ -95,15 +99,15 @@ export async function writeTransaction(root, writes, options = {}) {
       }
     } catch (error) {
       const conflicts = rollbackApplied(root, applied);
+      let failure = error;
       if (conflicts.length > 0) {
-        throw new StorageError("ROLLBACK_CONFLICT", `Transaction ${transactionId} could not be fully rolled back; external edits were preserved. Inspect its journal before repair.`, {
+        failure = new StorageError("ROLLBACK_CONFLICT", `Transaction ${transactionId} could not be fully rolled back; external edits were preserved. Inspect its journal before repair.`, {
           transactionId, cause: error.code ?? "OPERATION_FAILED", conflicts
         });
+      } else if (!(error instanceof StorageError)) {
+        failure = new StorageError("OPERATION_FAILED", `Transaction ${transactionId} failed: ${error.message}`);
       }
-      if (error instanceof StorageError) {
-        throw error;
-      }
-      throw new StorageError("OPERATION_FAILED", `Transaction ${transactionId} failed: ${error.message}`);
+      throw failure;
     }
 
     try {

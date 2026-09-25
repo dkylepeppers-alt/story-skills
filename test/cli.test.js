@@ -90,11 +90,11 @@ describe("cli", () => {
     expect(() => parseArgs(["add", "chapter", "Foo", "--number", "-h"])).toThrow("Missing value for --number");
     const cwd = makeTempDir();
     const missing = invoke(cwd, ["add", "chapter", "Foo", "--number"]);
-    expect(missing.code).toBe(1);
+    expect(missing.code).toBe(2);
     expect(missing.err).toContain("Missing value for --number");
     expect(() => parseArgs(["validate", "--path", "--bogus"])).toThrow("Missing value for --path");
     const badPath = invoke(cwd, ["validate", "--path", "--bogus"]);
-    expect(badPath.code).toBe(1);
+    expect(badPath.code).toBe(2);
     expect(badPath.err).toContain("Missing value for --path");
   });
 
@@ -104,7 +104,7 @@ describe("cli", () => {
     expect(() => parseArgs(["add", "chapter", "Foo", "--bogus"])).toThrow("Unknown option --bogus");
     const cwd = makeTempDir();
     const rejected = invoke(cwd, ["add", "chapter", "Foo", "--bogus", "value"]);
-    expect(rejected.code).toBe(1);
+    expect(rejected.code).toBe(2);
     expect(rejected.err).toContain("Unknown option --bogus");
   });
 
@@ -177,7 +177,7 @@ describe("cli", () => {
     const same = invoke(cwd, ["validate", root, "--path", root]);
     expect(same.code).toBe(0);
     const conflict = invoke(cwd, ["validate", root, "--path", cwd]);
-    expect(conflict.code).toBe(1);
+    expect(conflict.code).toBe(2);
     expect(conflict.err).toContain("Conflicting project paths");
     const added = invoke(cwd, ["add", "character", "Root Hero", "--path", root]);
     expect(added.code).toBe(0);
@@ -246,13 +246,13 @@ describe("cli", () => {
     expect(help).toContain("--introduced <id>");
     expect(help).toContain("--category <name>");
     const initPath = invoke(cwd, ["init", "Nope", "--path", "somewhere"]);
-    expect(initPath.code).toBe(1);
+    expect(initPath.code).toBe(2);
     expect(initPath.err).toContain("init uses --dir");
     const importPath = invoke(cwd, ["import", "draft.md", "--path", "somewhere"]);
-    expect(importPath.code).toBe(1);
+    expect(importPath.code).toBe(2);
     expect(importPath.err).toContain("import uses --dir");
     const unknown = invoke(cwd, ["nope"]);
-    expect(unknown.code).toBe(1);
+    expect(unknown.code).toBe(2);
     expect(unknown.err).toContain("Unknown command: nope");
   });
 
@@ -360,7 +360,7 @@ describe("cli", () => {
   test("reports command failures", () => {
     const cwd = makeTempDir();
     const init = invoke(cwd, ["init"]);
-    expect(init.code).toBe(1);
+    expect(init.code).toBe(2);
     expect(init.err).toContain("A story title is required");
 
     const validate = invoke(cwd, ["validate"]);
