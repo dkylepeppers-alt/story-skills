@@ -80,7 +80,11 @@ placed). It does not print ambiguous branches or cycles as a linear sequence.
 Comparison results are `before`, `equal`, `after`, or `unordered`. Schema v2
 `story timeline` still prints the dated scene report, POV balance, and
 character presence from `src/timeline.js`. Custody and clock checks in
-`src/continuity.js` are unchanged.
+`src/continuity.js` are unchanged. Scene `chronology.after` and fact
+`valid-from`/`valid-until` cursors are the references the shared index in
+`src/project/references.js` checks. A cursor beat resolves only inside its
+cursor's scene span, the same boundary chronology uses, so `loadProject`
+reports `DANGLING_REFERENCE` for a beat declared only in another scene.
 
 ## 2. CLI options
 

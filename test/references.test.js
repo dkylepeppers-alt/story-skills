@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { loadProject } from "../src/project/load.js";
 import { removeEntity } from "../src/project/entities.js";
+import { buildChronology } from "../src/state/chronology.js";
 import { makeProject } from "./support/project.js";
 
 const HASH = "a".repeat(64);
@@ -341,6 +342,42 @@ used-by:
     p.write("chapters/one.md", chapter);
     const project = await loadProject(p.root);
     expect(dangling(project, "beat_knock").some((item) => item.message.includes("beat"))).toBe(true);
+  });
+
+  test("loadProject reports a cursor beat that is declared only in a different scene", async () => {
+    const p = await makeProject();
+    await p.addEntity({ id: "chr_ada", type: "character", name: "Ada" });
+    await p.addScene({ id: "scn_door", title: "Door" });
+    await p.addScene({ id: "scn_hall", title: "Hall" });
+    const marker = "<!-- story-scene: scn_hall -->\n";
+    p.write("chapters/one.md", p.read("chapters/one.md").replace(marker, `${marker}<!-- story-beat: beat_knock -->\n`));
+    await p.addFact({
+      id: "fact_in_hall",
+      subject: "chr_ada",
+      predicate: "location",
+      value: "the hall",
+      "valid-from": { scene: "scn_hall", beat: "beat_knock", side: "after" }
+    });
+    expect(dangling(await p.load(), "beat_knock")).toEqual([]);
+    await p.addFact({
+      id: "fact_at_door",
+      subject: "chr_ada",
+      predicate: "location",
+      value: "the door",
+      "valid-from": "baseline",
+      "valid-until": { scene: "scn_door", beat: "beat_knock", side: "before" }
+    });
+    const project = await loadProject(p.root);
+    const found = dangling(project, "beat_knock");
+    expect(found).toHaveLength(1);
+    expect(found[0].recordIds).toEqual(["beat_knock", "fact_at_door"]);
+    expect(found[0].message).toContain("valid-until.beat");
+    expect(found[0].message).toContain("scn_door");
+    // Chronology places the same cursor inside the same scene span.
+    const order = buildChronology(project);
+    const cursor = project.records.get("fact_at_door").record["valid-until"];
+    expect(order.compare(cursor, { scene: "scn_door", side: "after" })).toBe("unordered");
+    expect(order.diagnostics.map((item) => item.code)).toContain("MISSING_BEAT");
   });
 
   test("a free-text fact value is not reported as a dangling id", async () => {
