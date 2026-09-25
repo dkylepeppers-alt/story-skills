@@ -396,7 +396,7 @@ describe("story-toolkit markdown import", () => {
     fs.writeFileSync(path.join(duplicate, "a.md"), body, "utf8");
     fs.writeFileSync(path.join(duplicate, "b.md"), body, "utf8");
     const refused = importMarkdown({ source: "dupes", cwd, out: "should-not-exist" });
-    expect(refused.exitCode).toBe(1);
+    expect(refused.exitCode).toBe(2);
     expect(refused.envelope.ok).toBe(false);
     expect(refused.envelope.diagnostics[0].message).toContain("chp_same");
     expect(fs.existsSync(path.join(cwd, "should-not-exist"))).toBe(false);

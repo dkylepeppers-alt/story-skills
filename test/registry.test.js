@@ -57,7 +57,7 @@ describe("command registry", () => {
     for (const command of COMMANDS.filter((entry) => entry.project === "none")) {
       for (const flag of ["path", "project"]) {
         const io = memoryIo(cwd);
-        expect(runCli([command.name, "x", `--${flag}`, "."], io)).toBe(1);
+        expect(runCli([command.name, "x", `--${flag}`, "."], io)).toBe(2);
         expect(io.error()).toBe(`${command.name} uses --dir for the target directory. --${flag} is the project root for other commands.\n`);
       }
     }

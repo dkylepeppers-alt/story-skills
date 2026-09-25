@@ -187,7 +187,7 @@ describe("story-toolkit remove policy", () => {
     const code = runCli(["entity", "remove", "chr_ada", "--policy", "detach", "--json"], io);
     const stdout = io.output();
 
-    expect(code).toBe(3);
+    expect(code).toBe(1);
     expect(stdout).toBe(JSON.stringify(JSON.parse(stdout)));
     const parsed = JSON.parse(stdout);
     expect(parsed.ok).toBe(false);
@@ -207,7 +207,7 @@ describe("story-toolkit remove policy", () => {
     const before = snapshot(p.root);
     const io = memoryIo(p.root);
 
-    expect(runCli(["entity", "remove", "chp_one", "--policy", "detach", "--json"], io)).toBe(3);
+    expect(runCli(["entity", "remove", "chp_one", "--policy", "detach", "--json"], io)).toBe(1);
     const parsed = JSON.parse(io.output());
     expect(parsed.ok).toBe(false);
     expect(parsed.diagnostics[0].code).toBe("REQUIRED_REFERENCE");

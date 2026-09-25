@@ -187,7 +187,7 @@ function errorResult(messages) {
         action: "Make every imported id unique and schema-valid, then import into a new directory."
       }))
     }),
-    exitCode: 1,
+    exitCode: 2,
     text: `${messages.join("\n")}\n`
   };
 }

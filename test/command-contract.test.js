@@ -132,7 +132,7 @@ describe("command result contract", () => {
       expect(parsed.command).toBe(name);
       expect(parsed.diagnostics[0].message).toContain(`Unknown command: ${name}`);
       const text = invoke(cwd, [name]);
-      expect(text.code).toBe(1);
+      expect(text.code).toBe(2);
       expect(text.err).toContain(`Unknown command: ${name}`);
       expect(text.out).toBe("");
     }

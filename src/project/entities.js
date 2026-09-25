@@ -449,7 +449,7 @@ export function removeEntity(root, id, options = {}) {
     const diagnostics = dependencyDiagnostics(id, classified, "detach");
     return {
       envelope: envelope({ command, ok: false, data: { id, policy }, diagnostics }),
-      exitCode: 3,
+      exitCode: 1,
       text: `${diagnostics.map((item) => item.message).join("\n")}\n`
     };
   }

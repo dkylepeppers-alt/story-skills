@@ -41,6 +41,7 @@ export function failure(command, message, code, exitCode, recordIds = [], eviden
 
 export function present(ctx, finished) {
   if (ctx.json) {
+    if (finished.log) ctx.io.stderr.write(finished.log);
     ctx.io.stderr.write(`story: ${finished.envelope.command}\n`);
   } else {
     if (finished.log) ctx.io.stderr.write(finished.log);

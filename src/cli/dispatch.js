@@ -1,10 +1,20 @@
 import path from "node:path";
 import { COMMANDS } from "../commands.js";
+import { StorageError } from "../contracts.js";
 import { formatOptionsHelp, isTruthy, parseArgs } from "../options.js";
 import { discoverProject } from "../project/discover.js";
 import { VERSION } from "../version.js";
 import { matchCommand, validateInvocation } from "./registry.js";
 import { argvRequestsJson, envelope, finding, invocationEnvelope } from "./result.js";
+
+const INVOCATION_PREFIXES = [
+  "Missing value",
+  "Unknown option",
+  "Unknown value",
+  "Conflicting project paths",
+  "A story title is required",
+  "Cannot derive"
+];
 
 const COMMAND_COLUMN = 21;
 
@@ -107,10 +117,10 @@ function rejectProjectFlag(io, json, name, flag) {
   if (json) {
     io.stdout.write(JSON.stringify(invocationEnvelope(name, message)));
     io.stderr.write(`${message}\n`);
-    return 2;
+  } else {
+    io.stderr.write(`${message}\n`);
   }
-  io.stderr.write(`${message}\n`);
-  return 1;
+  return 2;
 }
 
 function rejectInvocation(io, json, command, message, code = 2) {
@@ -155,7 +165,7 @@ export function runCli(argv, io) {
         return 2;
       }
       io.stderr.write(`Unknown command: ${commandName}\n\n${HELP}`);
-      return 1;
+      return 2;
     }
 
     if (command.project === "none" && parsed.options.path !== undefined) {
@@ -206,15 +216,40 @@ export function runCli(argv, io) {
 
     return outcome;
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const classified = classifyThrown(error);
     if (!json) json = argvRequestsJson(argv);
     if (!commandName) commandName = commandToken(argv);
     if (json) {
-      io.stdout.write(JSON.stringify(invocationEnvelope(commandName, message)));
-      io.stderr.write(`${message}\n`);
-      return 2;
+      io.stdout.write(JSON.stringify(envelope({
+        command: commandName,
+        ok: false,
+        diagnostics: [finding({
+          code: classified.code,
+          message: classified.message,
+          action: classified.code === "INVALID_INVOCATION"
+            ? "Fix the command arguments and try again."
+            : "Fix the reported error and run the command again."
+        })]
+      })));
     }
-    io.stderr.write(`${message}\n`);
-    return 1;
+    io.stderr.write(`${classified.message}\n`);
+    return classified.exitCode;
   }
+}
+
+function classifyThrown(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (error instanceof StorageError) {
+    if (error.code === "STALE_SOURCE" || error.code === "LOCKED") {
+      return { exitCode: 3, code: error.code, message };
+    }
+    return { exitCode: 4, code: error.code || "OPERATION_FAILED", message };
+  }
+  if (error && (error.code === "EACCES" || error.code === "EPERM")) {
+    return { exitCode: 4, code: "OPERATION_FAILED", message };
+  }
+  if (INVOCATION_PREFIXES.some((prefix) => message.startsWith(prefix))) {
+    return { exitCode: 2, code: "INVALID_INVOCATION", message };
+  }
+  return { exitCode: 1, code: "COMMAND_FAILED", message };
 }
