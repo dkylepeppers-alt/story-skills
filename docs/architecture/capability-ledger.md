@@ -56,7 +56,8 @@ status|update|remove`, `context`, `entity …`, `check --only`, `snapshot`,
 by the design's command matrix; they are additions, not ledger dispositions.
 Task 3 registers `entity add|rename|remove|show`, Task 5 registers
 `fact add|list|retract`, Task 6 registers `decision add|list|supersede`
-and `issue add|list|resolve|dismiss`, and Task 7 registers `context`.
+and `issue add|list|resolve|dismiss`, Task 7 registers `context`, and
+Task 8 registers `snapshot` and `changes`.
 The other names above are not registered and fail as unknown commands
 (`test/command-contract.test.js`).
 
@@ -209,11 +210,21 @@ scene and beat markers locked unless declared editable. Violations are
 `EDIT_OUT_OF_SCOPE` errors with before/after byte spans; nothing is
 rewritten. `dialogueCandidates` offers quoted-content and tag-or-beat ranges
 as advice only; the caller's declared ranges decide.
+`story snapshot <name> [--dry-run]` writes that snapshot (exit 1 if the
+name exists, 2 for an invalid name). It runs in any directory with a
+`story.md`, including schema v2 projects, so `compare` can use it.
+`story changes --since <git-ref-or-snapshot> [--scope <json-file>]` returns
+the ChangeReport (`data`) and never writes. It reads story-toolkit projects
+only. It exits 1 on error findings (out-of-scope edits, removed evidence),
+2 for an unreadable or invalid scope or an unknown, ambiguous or malformed
+baseline, 3 when a scope's baseline hash or a snapshot copy no longer
+matches, and 4 when Git itself fails. Stale evidence is a warning and
+exits 0.
 
 ## 2. CLI options
 
 Baseline source of truth: `src/options.js` (68 registered options: 60 with
-help, 8 undocumented aliases, plus the Task 3, 5, 6 and 7 flags below). The new option set
+help, 8 undocumented aliases, plus the Task 3, 5, 6, 7 and 8 flags below). The new option set
 is specified by the design (`--format text|json`, `--project`, `--dry-run`,
 structured `--data`); this section records where each baseline option's
 behavior lands. `--format text|json` selects the result envelope. Build kinds
@@ -232,11 +243,12 @@ them to `--kind`.
 | Undocumented aliases | `--locations --characters --mentions --members --arcs --aliases --act --sources` | Intentionally removed once schema v2 `add` is replaced (undocumented convenience aliases; behavior replaced by repeatable documented forms and `--data`). Task 3 still accepts them because v2 `add` and `test/cli.test.js` use them | 3 | `test/cli.test.js` |
 | Global (new) | `--help/-h --version/-v` | Retained. `--help` and `--version` stay plain text even when `--format json` is present | 3 | `test/registry.test.js`, `test/command-contract.test.js` |
 | Result envelope (new) | `--format text\|json` | Stdout is one JSON result object when the value is `json`; logs stay on stderr. `text` is the plain result | 3 | `test/command-contract.test.js` |
-| Mutation preview (new) | `--dry-run` | Added in Task 3 for fork init, import, and entity mutations; Task 5 adds `fact add` and `fact retract`; Task 6 adds decision and issue mutations | 3, 5, 6 | `test/project.test.js`, `test/state.test.js`, `test/memory.test.js` |
+| Mutation preview (new) | `--dry-run` | Added in Task 3 for fork init, import, and entity mutations; Task 5 adds `fact add` and `fact retract`; Task 6 adds decision and issue mutations; Task 8 adds `snapshot` | 3, 5, 6, 8 | `test/project.test.js`, `test/state.test.js`, `test/memory.test.js`, `test/changes.test.js` |
 | Removal policy (new) | `--policy refuse\|detach` | Added in Task 3 for `entity remove` | 3 | `test/rename-remove.test.js` |
 | Structured data (new) | `--data <json-file>` | Added in Task 5 for `fact add`; Task 6 adds `decision add`, `decision supersede`, `issue add`, `issue resolve`, and `issue dismiss` | 5, 6 | `test/state.test.js`, `test/memory.test.js` |
 | Story cursor (new) | `--scene <n\|id> --beat <id> --side before\|after` | Task 5 `fact list` and `knowledge` cursor; Task 7 `context` target or reading boundary. `--scene` still takes a scene number for schema v2 `add`; `--side` defaults to `before` | 5, 7 | `test/state.test.js`, `test/context.test.js` |
 | Context request (new) | `--task --audience writer\|reader --constraint --include --max-bytes` | Added in Task 7 for `context`. `--constraint` and `--include` are repeatable; `--max-bytes` defaults to 48000 | 7 | `test/context.test.js` |
+| Revision baseline (new) | `--since <git-ref-or-snapshot> --scope <json-file>` | Added in Task 8 for `changes`. `git:` and `snapshot:` prefixes are explicit; a bare name must match exactly one | 8 | `test/changes.test.js` |
 | Inactive records (new) | `--include-inactive --include-work` | Added in Task 5 for `fact list`. Listing never makes an inactive or `work/` record apply at a cursor. Task 6 adds `--include-inactive` to `decision list` and `issue list` | 5, 6 | `test/state.test.js`, `test/memory.test.js` |
 | Record scope (new) | `--record <id>` | Added in Task 6 for `decision list` and `issue list` | 6 | `test/memory.test.js` |
 | Fork selector (new) | `--toolkit` | Added in Task 3. Selects story-toolkit `init` and `import` | 3 | `test/project.test.js`, `test/command-contract.test.js` |

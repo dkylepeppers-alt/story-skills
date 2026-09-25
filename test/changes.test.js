@@ -6,6 +6,8 @@ import { BaselineError, resolveBaseline } from "../src/changes/baseline.js";
 import { compareRevision } from "../src/changes/compare.js";
 import { createSnapshot, readSnapshot } from "../src/changes/snapshot.js";
 import { sha256Hex } from "../src/storage/hash.js";
+import { makeTempDir } from "./helpers.js";
+import { invoke, json, writeData } from "./support/cli.js";
 import { makeKnowledgeFixture, makeProject } from "./support/project.js";
 
 function git(cwd, ...args) {
@@ -398,5 +400,181 @@ describe("Git baselines", () => {
     const p = await makeProject();
     expect(() => resolveBaseline(p.root, "main")).toThrow(expect.objectContaining({ code: "BASELINE_NOT_FOUND" }));
     expect(() => resolveBaseline(p.root, "git:main")).toThrow(expect.objectContaining({ code: "NOT_A_GIT_REPOSITORY", exitCode: 2 }));
+  });
+});
+
+describe("snapshot and changes commands", () => {
+  test("story snapshot writes an explicit snapshot once; --dry-run writes nothing", async () => {
+    const p = await makeKnowledgeFixture();
+    const dry = json(p.root, ["snapshot", "draft-1", "--dry-run"]);
+    expect(dry.code).toBe(0);
+    expect(dry.parsed.data).toMatchObject({ dryRun: true, snapshot: { name: "draft-1" } });
+    expect(dry.parsed.writes.map((write) => write.path)).toContain(".story/revisions/draft-1/manifest.json");
+    expect(fs.existsSync(path.join(p.root, ".story/revisions"))).toBe(false);
+
+    const made = json(p.root, ["snapshot", "draft-1"]);
+    expect(made.code).toBe(0);
+    expect(made.parsed).toMatchObject({ ok: true, command: "snapshot", data: { dryRun: false, snapshot: { name: "draft-1", path: ".story/revisions/draft-1" } } });
+    expect(made.parsed.writes[0]).toEqual({ path: ".story/revisions/draft-1/manifest.json", action: "create", expectedHash: null });
+    expect(fs.existsSync(path.join(p.root, ".story/revisions/draft-1/manifest.json"))).toBe(true);
+
+    const text = invoke(p.root, ["snapshot", "draft-2"]);
+    expect(text.code).toBe(0);
+    expect(text.out).toMatch(/^Snapshot draft-2: \d+ files, \d+ bytes, hash [0-9a-f]{12}/);
+    expect(text.out).toContain(".story/revisions/draft-2");
+
+    const again = json(p.root, ["snapshot", "draft-1"]);
+    expect(again.code).toBe(1);
+    expect(again.parsed.diagnostics[0].code).toBe("SNAPSHOT_EXISTS");
+    expect(json(p.root, ["snapshot", "../out"]).parsed.diagnostics[0].code).toBe("SNAPSHOT_NAME_INVALID");
+    expect(invoke(p.root, ["snapshot", "../out"]).code).toBe(2);
+    expect(invoke(p.root, ["snapshot"]).code).toBe(2);
+  });
+
+  test("story changes reports the comparison; removed evidence exits 1", async () => {
+    const p = await makeKnowledgeFixture();
+    json(p.root, ["snapshot", "base"]);
+    fs.renameSync(path.join(p.root, "characters/chr_ada.md"), path.join(p.root, "characters/ada.md"));
+    p.write("chapters/one.md", p.read("chapters/one.md").replace("decides the key is lost", "decides the key was stolen"));
+
+    const warned = json(p.root, ["changes", "--since", "base"]);
+    expect(warned.code).toBe(0);
+    expect(warned.parsed.ok).toBe(true);
+    expect(warned.parsed.data.baseline).toMatchObject({ kind: "snapshot", name: "base" });
+    expect(warned.parsed.data.moved.map((item) => item.id)).toEqual(["chr_ada"]);
+    expect(warned.parsed.diagnostics.map((item) => item.code)).toEqual(["STALE_EVIDENCE"]);
+    expect(warned.parsed.writes).toEqual([]);
+
+    const text = invoke(p.root, ["changes", "--since", "snapshot:base"]);
+    expect(text.code).toBe(0);
+    expect(text.out).toContain("Changes since snapshot base (hash ");
+    expect(text.out).toContain("moved chr_ada: characters/chr_ada.md -> characters/ada.md");
+    expect(text.out).toContain("changed scn_cellar");
+    expect(text.out).toContain("changed fact_false_belief");
+    expect(text.out).toContain("warning STALE_EVIDENCE");
+
+    p.write("chapters/one.md", p.read("chapters/one.md").replace(/<!-- story-beat: beat_handoff -->\n[^\n]*\n/, ""));
+    const removed = json(p.root, ["changes", "--since", "base"]);
+    expect(removed.code).toBe(1);
+    expect(removed.parsed.ok).toBe(false);
+    expect(removed.parsed.diagnostics.map((item) => item.code)).toContain("SOURCE_REMOVED");
+    expect(invoke(p.root, ["changes", "--since", "base"]).err).toContain("error SOURCE_REMOVED");
+  });
+
+  test("the text report lists every kind of change", async () => {
+    const p = await makeKnowledgeFixture();
+    await p.addEntity({ id: "chr_bram", type: "character", name: "Bram" });
+    await p.addScene({ id: "scn_late", title: "Late" });
+    await p.addFact({ id: "fact_old", subject: "chr_ada", predicate: "mood", value: "calm", sources: [p.source("scn_late")] });
+    await p.addEntity({ id: "arc_trust", type: "arc", name: "Trust", sources: [p.source("scn_opening")] });
+    p.write("notes/lore.md", "Lore.\n");
+    await p.addEntity({ id: "que_lore", type: "question", name: "Lore?", sources: [p.fileSource("notes/lore.md", "research")] });
+    json(p.root, ["snapshot", "base"]);
+
+    fs.rmSync(path.join(p.root, "characters/chr_bram.md"));
+    await p.addEntity({ id: "chr_cato", type: "character", name: "Cato" });
+    fs.rmSync(path.join(p.root, "facts/fact_old.md"));
+    await p.addFact({ id: "fact_new", subject: "chr_ada", predicate: "mood", value: "wary", sources: [p.source("scn_cellar")] });
+    const chapter = p.read("chapters/one.md");
+    const opening = chapter.slice(chapter.indexOf("<!-- story-scene: scn_opening"), chapter.indexOf("<!-- story-scene: scn_cellar"));
+    p.write("chapters/one.md", chapter.replace(opening, "").replace("<!-- story-scene: scn_late -->\n", ""));
+    fs.rmSync(path.join(p.root, "scenes/scn_late.md"));
+    await p.addScene({ id: "scn_dawn", title: "Dawn" });
+    fs.rmSync(path.join(p.root, "notes/lore.md"));
+    p.write("facts/fact_key_handoff.md", p.read("facts/fact_key_handoff.md").replace("predicate: holder", "predicate: owner"));
+
+    const text = invoke(p.root, ["changes", "--since", "base"]);
+    expect(text.code).toBe(1);
+    for (const line of [
+      "added chr_cato (character): characters/chr_cato.md",
+      "removed chr_bram (character): characters/chr_bram.md",
+      "added scn_dawn in chp_one",
+      "removed scn_late from chp_one",
+      "moved scn_opening: chp_one #0 -> chp_one (unplaced)",
+      "added fact_new",
+      "removed fact_old",
+      "changed fact_key_handoff: predicate",
+      "removed arc_trust sources: chapters/one.md#scn_opening",
+      "removed que_lore sources: notes/lore.md"
+    ]) expect(text.err).toContain(line);
+  });
+
+  test("story snapshot needs a story.md", () => {
+    const dir = makeTempDir();
+    try {
+      const result = json(dir, ["snapshot", "base", "--project", dir]);
+      expect(result.code).toBe(2);
+      expect(result.parsed.diagnostics[0].code).toBe("PROJECT_NOT_FOUND");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an unchanged project says so", async () => {
+    const p = await makeProject();
+    json(p.root, ["snapshot", "base"]);
+    const text = invoke(p.root, ["changes", "--since", "base"]);
+    expect(text.code).toBe(0);
+    expect(text.out).toContain("No changes.");
+  });
+
+  test("story changes --scope: out of scope exits 1, an invalid scope 2, a stale baseline 3", async () => {
+    const p = await makeKnowledgeFixture();
+    json(p.root, ["snapshot", "base"]);
+    const before = fs.readFileSync(path.join(p.root, "chapters/one.md"));
+    const start = before.indexOf(Buffer.from("I took it"));
+    const scope = (hash, ranges = [{ start, end: start + 9 }]) => ({ format: "story-toolkit", "schema-version": 1, type: "scope", files: [{ path: "chapters/one.md", "baseline-hash": hash, ranges }] });
+    p.write("chapters/one.md", before.toString().replace("Zoë says", "Zoë whispers"));
+
+    const out = json(p.root, ["changes", "--since", "base", "--scope", writeData(p, "scope", scope(sha256Hex(before)))]);
+    expect(out.code).toBe(1);
+    expect(out.parsed.data.scope.ok).toBe(false);
+    expect(out.parsed.diagnostics.map((item) => item.code)).toContain("EDIT_OUT_OF_SCOPE");
+    const text = invoke(p.root, ["changes", "--since", "base", "--scope", writeData(p, "scope", scope(sha256Hex(before)))]);
+    expect(text.err).toContain("Scope: 1 violation");
+    expect(text.err).toContain("\"says\" -> \"whispers\"");
+
+    p.write("chapters/one.md", before.toString().replace("I took it", "I have it"));
+    const inside = invoke(p.root, ["changes", "--since", "base", "--scope", writeData(p, "scope", scope(sha256Hex(before)))]);
+    expect(inside.code).toBe(0);
+    expect(inside.out).toContain("Scope: all changes are inside the declared ranges");
+
+    const stale = json(p.root, ["changes", "--since", "base", "--scope", writeData(p, "scope", scope("0".repeat(64)))]);
+    expect(stale.code).toBe(3);
+    expect(stale.parsed.diagnostics.map((item) => item.code)).toContain("SCOPE_BASELINE_MISMATCH");
+
+    const schema = json(p.root, ["changes", "--since", "base", "--scope", writeData(p, "scope", { files: "nope" })]);
+    expect(schema.code).toBe(2);
+    expect(schema.parsed.diagnostics[0].code).toBe("SCOPE_INVALID");
+    const broken = json(p.root, ["changes", "--since", "base", "--scope", writeData(p, "scope", "{not json")]);
+    expect(broken.code).toBe(2);
+    expect(broken.parsed.diagnostics[0]).toMatchObject({ code: "SCOPE_INVALID", message: expect.stringContaining("is not JSON") });
+    const missing = json(p.root, ["changes", "--since", "base", "--scope", path.join(p.root, "..", "no-such-scope.json")]);
+    expect(missing.code).toBe(2);
+    expect(missing.parsed.diagnostics[0].message).toContain("Cannot read --scope");
+  });
+
+  test("baseline failures map to their exit codes", async () => {
+    const p = await makeProject();
+    expect(json(p.root, ["changes", "--since", "nothing"]).parsed.diagnostics[0].code).toBe("BASELINE_NOT_FOUND");
+    expect(invoke(p.root, ["changes", "--since", "nothing"]).code).toBe(2);
+    expect(invoke(p.root, ["changes"]).code).toBe(2);
+    json(p.root, ["snapshot", "base"]);
+    p.write(".story/revisions/base/files/story.md", "tampered\n");
+    const corrupt = invoke(p.root, ["changes", "--since", "base"]);
+    expect(corrupt.code).toBe(3);
+    expect(corrupt.err).toContain("Snapshot base is corrupt");
+  });
+
+  test("story changes reads format story-toolkit projects only", async () => {
+    const root = makeTempDir();
+    fs.writeFileSync(path.join(root, "story.md"), "---\ntitle: Old\nschema-version: 2\n---\n");
+    try {
+      expect(json(root, ["snapshot", "base"]).code).toBe(0);
+      const result = json(root, ["changes", "--since", "base"]);
+      expect(result.code).toBe(2);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });

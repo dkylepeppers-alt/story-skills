@@ -49,6 +49,8 @@ export const OPTIONS = [
   { name: "constraint", value: "<text>", repeatable: true, help: ["context: a required caller constraint; repeatable"] },
   { name: "include", value: "<id>", repeatable: true, help: ["context: retrieve this record as required", "material; repeatable"] },
   { name: "max-bytes", value: "<n>", help: ["context: UTF-8 byte budget for the packet", "(default 48000)"] },
+  { name: "since", value: "<baseline>", help: ["changes: a Git ref (git:<ref>) or snapshot", "(snapshot:<name>); a bare name must match one"] },
+  { name: "scope", value: "<json-file>", help: ["changes: ScopeSpec of allowed byte ranges to check"] },
   { name: "pages", value: "<n>", help: ["Synopsis length for synopsis (1 or 3)"] },
   { name: "actionable", help: ["Include next actions in report"] },
   { name: "number", value: "<n>", help: ["Chapter number for add chapter"] },

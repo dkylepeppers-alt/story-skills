@@ -14146,6 +14146,8 @@ var OPTIONS = [
   { name: "constraint", value: "<text>", repeatable: true, help: ["context: a required caller constraint; repeatable"] },
   { name: "include", value: "<id>", repeatable: true, help: ["context: retrieve this record as required", "material; repeatable"] },
   { name: "max-bytes", value: "<n>", help: ["context: UTF-8 byte budget for the packet", "(default 48000)"] },
+  { name: "since", value: "<baseline>", help: ["changes: a Git ref (git:<ref>) or snapshot", "(snapshot:<name>); a bare name must match one"] },
+  { name: "scope", value: "<json-file>", help: ["changes: ScopeSpec of allowed byte ranges to check"] },
   { name: "pages", value: "<n>", help: ["Synopsis length for synopsis (1 or 3)"] },
   { name: "actionable", help: ["Include next actions in report"] },
   { name: "number", value: "<n>", help: ["Chapter number for add chapter"] },
@@ -14309,10 +14311,10 @@ function parseArgs(argv) {
   return { positionals, options };
 }
 // src/cli/dispatch.js
-import path23 from "node:path";
+import path28 from "node:path";
 
 // src/commands.js
-import path22 from "node:path";
+import path27 from "node:path";
 
 // src/compare.js
 function compareChapters(previous, current) {
@@ -14751,6 +14753,9 @@ function resolveRecordSchema(record) {
     return TYPE_SCHEMAS[record.type];
   }
   return ENTITY_TYPES.has(record.type) ? "entity" : null;
+}
+function validateDocument(data, name) {
+  return checkFormatAndSchema(data, name);
 }
 function validateRecord(record) {
   if (record && record.format === undefined && record["schema-version"] === 2) {
@@ -22986,13 +22991,320 @@ function showEntityCommand(ctx) {
   return present(ctx, showEntity(ctx.root(), ctx.parsed.positionals[2]));
 }
 
-// src/context/cache.js
+// src/cli/handlers/changes.js
 import fs18 from "node:fs";
-import path19 from "node:path";
+import path20 from "node:path";
 
-// src/state/chronology.js
+// src/changes/baseline.js
+import fs14 from "node:fs";
+import path16 from "node:path";
+import { spawnSync } from "node:child_process";
+
+// src/changes/snapshot.js
 import fs13 from "node:fs";
 import path15 from "node:path";
+class BaselineError extends Error {
+  constructor(code, message, exitCode) {
+    super(message);
+    this.name = "BaselineError";
+    this.code = code;
+    this.exitCode = exitCode;
+  }
+}
+var SNAPSHOT_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+var REVISIONS_DIRECTORY = ".story/revisions";
+var SKIPPED_DIRECTORIES = new Set([".git", ".story", "node_modules", "dist"]);
+function isSnapshotName(name) {
+  return typeof name === "string" && SNAPSHOT_NAME_PATTERN.test(name) && !name.endsWith(".");
+}
+function isComparablePath(file) {
+  if (typeof file !== "string" || file === "" || file.startsWith("/") || file.includes("\\") || file.includes("\x00"))
+    return false;
+  const parts = file.split("/");
+  return !parts.some((part) => part === "" || part === "." || part === "..") && !SKIPPED_DIRECTORIES.has(parts[0]);
+}
+function projectFiles(root) {
+  const files = new Map;
+  const walk = (relative3) => {
+    const entries = fs13.readdirSync(path15.join(root, relative3), { withFileTypes: true }).sort((left, right) => compareText(left.name, right.name));
+    for (const entry of entries) {
+      const child = relative3 === "" ? entry.name : `${relative3}/${entry.name}`;
+      if (entry.isDirectory()) {
+        if (!(relative3 === "" && SKIPPED_DIRECTORIES.has(entry.name)))
+          walk(child);
+      } else if (entry.isFile()) {
+        files.set(child, fs13.readFileSync(path15.join(root, child)));
+      }
+    }
+  };
+  walk("");
+  return new Map([...files].sort(([left], [right]) => compareText(left, right)));
+}
+function compareText(left, right) {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+function manifestFor(name, files) {
+  const manifest = {
+    format: FORMAT,
+    "schema-version": SCHEMA_VERSION,
+    type: "revision",
+    name,
+    files: [...files].map(([file, bytes]) => ({ path: file, hash: sha256Hex(bytes), bytes: bytes.length }))
+  };
+  return Buffer.from(`${JSON.stringify(manifest, null, 2)}
+`);
+}
+function snapshotDirectory(name) {
+  return `${REVISIONS_DIRECTORY}/${name}`;
+}
+function snapshotExists(root, name) {
+  return isSnapshotName(name) && fs13.existsSync(path15.join(root, snapshotDirectory(name)));
+}
+function createSnapshot(root, name, options = {}) {
+  if (!isSnapshotName(name)) {
+    throw new BaselineError("SNAPSHOT_NAME_INVALID", `Snapshot names use letters, digits, dot, underscore and hyphen, start with a letter or digit and have at most 64 characters: ${JSON.stringify(name)}`, 2);
+  }
+  const directory = snapshotDirectory(name);
+  if (fs13.existsSync(path15.join(root, directory))) {
+    throw new BaselineError("SNAPSHOT_EXISTS", `Snapshot ${name} already exists at ${directory}; snapshots are immutable, so choose a new name`, 1);
+  }
+  const files = projectFiles(root);
+  const manifest = manifestFor(name, files);
+  const writes = [
+    { path: `${directory}/manifest.json`, action: "create", expectedHash: null, content: manifest },
+    ...[...files].map(([file, bytes]) => ({ path: `${directory}/files/${file}`, action: "create", expectedHash: null, content: bytes }))
+  ];
+  const dryRun = options.dryRun === true;
+  if (!dryRun) {
+    for (const write of writes)
+      fs13.mkdirSync(path15.dirname(path15.join(root, write.path)), { recursive: true });
+    try {
+      writeTransactionSync(root, writes);
+    } catch (error) {
+      fs13.rmSync(path15.join(root, directory), { recursive: true, force: true });
+      throw error;
+    }
+  }
+  return {
+    snapshot: {
+      name,
+      hash: sha256Hex(manifest),
+      path: directory,
+      files: files.size,
+      bytes: [...files.values()].reduce((sum, bytes) => sum + bytes.length, 0)
+    },
+    writes: writes.map((write) => ({ path: write.path, action: write.action })),
+    dryRun
+  };
+}
+function corrupt(name, detail) {
+  return new BaselineError("SNAPSHOT_CORRUPT", `Snapshot ${name} is corrupt: ${detail}`, 3);
+}
+function readSnapshot(root, name) {
+  const directory = path15.join(root, snapshotDirectory(name));
+  if (!snapshotExists(root, name)) {
+    throw new BaselineError("BASELINE_NOT_FOUND", `No snapshot named ${name} in ${REVISIONS_DIRECTORY}/`, 2);
+  }
+  let raw;
+  let manifest;
+  try {
+    raw = fs13.readFileSync(path15.join(directory, "manifest.json"));
+    manifest = JSON.parse(raw.toString("utf8"));
+  } catch (error) {
+    throw corrupt(name, `manifest.json cannot be read: ${error.message}`);
+  }
+  if (manifest === null || typeof manifest !== "object" || manifest.format !== FORMAT || manifest.type !== "revision" || manifest.name !== name || !Array.isArray(manifest.files)) {
+    throw corrupt(name, "manifest.json is not a story-toolkit revision manifest for this name");
+  }
+  const files = new Map;
+  for (const file of manifest.files) {
+    if (file === null || typeof file !== "object" || !isComparablePath(file.path) || typeof file.hash !== "string") {
+      throw corrupt(name, `manifest entry ${JSON.stringify(file?.path ?? file)} is not a safe project path with a hash`);
+    }
+    let bytes;
+    try {
+      bytes = fs13.readFileSync(path15.join(directory, "files", file.path));
+    } catch {
+      throw corrupt(name, `${file.path} is missing from the snapshot copy`);
+    }
+    if (sha256Hex(bytes) !== file.hash || bytes.length !== file.bytes) {
+      throw corrupt(name, `${file.path} no longer matches its manifest hash`);
+    }
+    files.set(file.path, bytes);
+  }
+  return { baseline: { kind: "snapshot", name, hash: sha256Hex(raw) }, files };
+}
+
+// src/changes/baseline.js
+var GIT_REF_PATTERN2 = /^[A-Za-z0-9._/@{}~^][A-Za-z0-9._/@{}~^-]*$/;
+function isGitRef(ref) {
+  return typeof ref === "string" && GIT_REF_PATTERN2.test(ref) && !ref.includes("..");
+}
+function gitEnv() {
+  const env = { ...process.env, LC_ALL: "C", GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" };
+  for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_NAMESPACE", "GIT_COMMON_DIR"])
+    delete env[key];
+  return env;
+}
+function run(root, args, input) {
+  const result = spawnSync("git", args, {
+    cwd: root,
+    env: gitEnv(),
+    input,
+    maxBuffer: 1024 * 1024 * 1024,
+    stdio: ["pipe", "pipe", "pipe"]
+  });
+  if (result.error) {
+    throw new BaselineError("GIT_FAILED", `Could not run git ${args[0]}: ${result.error.message}`, 4);
+  }
+  return { status: result.status, stdout: result.stdout, stderr: result.stderr.toString("utf8") };
+}
+function must(root, args, input) {
+  const result = run(root, args, input);
+  if (result.status !== 0) {
+    throw new BaselineError("GIT_FAILED", `git ${args[0]} failed: ${result.stderr.trim() || `exit ${result.status}`}`, 4);
+  }
+  return result.stdout;
+}
+function repositoryPrefix(root) {
+  const result = run(root, ["rev-parse", "--show-prefix"]);
+  if (result.status !== 0) {
+    throw new BaselineError("NOT_A_GIT_REPOSITORY", `${root} is not inside a Git repository, so it has no Git baselines; use a snapshot`, 2);
+  }
+  return result.stdout.toString("utf8").trim();
+}
+function exactRefs(root, ref) {
+  const candidates = ["refs/heads/", "refs/tags/", "refs/remotes/"].map((space) => `${space}${ref}`);
+  const listed = must(root, ["for-each-ref", "--format=%(refname)", ...candidates]).toString("utf8").split(`
+`);
+  return listed.filter((name) => candidates.includes(name)).map((name) => name.slice("refs/".length));
+}
+function resolveGitCommit(root, ref) {
+  repositoryPrefix(root);
+  const result = run(root, ["-c", "core.warnAmbiguousRefs=true", "rev-parse", "--verify", "--end-of-options", `${ref}^{commit}`]);
+  if (/refname '.*' is ambiguous|short object ID .* is ambiguous/.test(result.stderr)) {
+    const names = exactRefs(root, ref);
+    const choices = names.length > 0 ? `: ${names.join(", ")}. Name one in full, such as refs/${names[0]}` : "; give more of the commit hash";
+    throw new BaselineError("REF_AMBIGUOUS", `Git ref ${ref} is ambiguous${choices}`, 2);
+  }
+  if (result.status !== 0) {
+    throw new BaselineError("BASELINE_NOT_FOUND", `No Git commit named ${ref}`, 2);
+  }
+  return result.stdout.toString("utf8").trim();
+}
+function withoutPrefix(prefix, file) {
+  return file.startsWith(prefix) ? file.slice(prefix.length) : null;
+}
+function filesAtCommit(root, prefix, commit2) {
+  const listing = must(root, ["ls-tree", "-r", "-z", "--full-name", commit2, "--", "."]).toString("utf8").split("\x00");
+  const entries = [];
+  for (const line of listing) {
+    const match = /^(\d+) blob ([0-9a-f]+)\t(.*)$/s.exec(line);
+    if (!match || match[1] === "120000")
+      continue;
+    const file = withoutPrefix(prefix, match[3]);
+    if (file !== null && isComparablePath(file))
+      entries.push({ file, oid: match[2] });
+  }
+  const files = new Map;
+  if (entries.length === 0)
+    return files;
+  const output = must(root, ["cat-file", "--batch"], `${entries.map((entry) => entry.oid).join(`
+`)}
+`);
+  let offset = 0;
+  for (const entry of entries) {
+    const headerEnd = output.indexOf(10, offset);
+    const header = output.subarray(offset, headerEnd).toString("utf8").split(" ");
+    if (header[1] !== "blob") {
+      throw new BaselineError("GIT_FAILED", `git cat-file could not read ${entry.file} at ${commit2.slice(0, 12)}: ${header.slice(1).join(" ")}`, 4);
+    }
+    const size = Number(header[2]);
+    files.set(entry.file, Buffer.from(output.subarray(headerEnd + 1, headerEnd + 1 + size)));
+    offset = headerEnd + 1 + size + 1;
+  }
+  return new Map([...files].sort(([left], [right]) => compareText(left, right)));
+}
+function workingFiles(root, prefix) {
+  const listing = must(root, ["ls-files", "-z", "-c", "-o", "--exclude-standard", "--full-name", "--", "."]).toString("utf8").split("\x00");
+  const files = new Map;
+  for (const name of listing) {
+    const file = name === "" ? null : withoutPrefix(prefix, name);
+    if (file === null || !isComparablePath(file) || files.has(file))
+      continue;
+    const absolute = path16.join(root, file);
+    let stat;
+    try {
+      stat = fs14.lstatSync(absolute);
+    } catch {
+      continue;
+    }
+    if (stat.isFile())
+      files.set(file, fs14.readFileSync(absolute));
+  }
+  return new Map([...files].sort(([left], [right]) => compareText(left, right)));
+}
+function gitBaseline(root, ref, commit2 = resolveGitCommit(root, ref)) {
+  const prefix = repositoryPrefix(root);
+  return {
+    baseline: { kind: "git", ref, commit: commit2 },
+    files: filesAtCommit(root, prefix, commit2),
+    current: workingFiles(root, prefix)
+  };
+}
+function snapshotBaseline(root, name) {
+  const { baseline, files } = readSnapshot(root, name);
+  return { baseline, files, current: projectFiles(root) };
+}
+function invalid(since) {
+  return new BaselineError("BASELINE_INVALID", `Unsupported baseline ${JSON.stringify(since)}: name a Git ref (git:<ref>) or an explicit snapshot (snapshot:<name>)`, 2);
+}
+function resolveBaseline(root, since) {
+  if (typeof since !== "string")
+    throw invalid(since);
+  if (since.startsWith("snapshot:")) {
+    const name = since.slice("snapshot:".length);
+    if (!isSnapshotName(name))
+      throw invalid(since);
+    return snapshotBaseline(root, name);
+  }
+  if (since.startsWith("git:")) {
+    const ref = since.slice("git:".length);
+    if (!isGitRef(ref))
+      throw invalid(since);
+    return gitBaseline(root, ref);
+  }
+  const snapshot = snapshotExists(root, since);
+  if (!isGitRef(since)) {
+    if (snapshot)
+      return snapshotBaseline(root, since);
+    throw invalid(since);
+  }
+  let commit2 = null;
+  try {
+    commit2 = resolveGitCommit(root, since);
+  } catch (error) {
+    if (error.code !== "BASELINE_NOT_FOUND" && error.code !== "NOT_A_GIT_REPOSITORY")
+      throw error;
+  }
+  if (snapshot && commit2) {
+    throw new BaselineError("BASELINE_AMBIGUOUS", `${since} names both a snapshot and Git commit ${commit2.slice(0, 12)}; use snapshot:${since} or git:${since}`, 2);
+  }
+  if (snapshot)
+    return snapshotBaseline(root, since);
+  if (commit2)
+    return gitBaseline(root, since, commit2);
+  throw new BaselineError("BASELINE_NOT_FOUND", `No snapshot or Git commit named ${since}`, 2);
+}
+
+// src/changes/compare.js
+import fs16 from "node:fs";
+import os from "node:os";
+import path18 from "node:path";
+
+// src/state/chronology.js
+import fs15 from "node:fs";
+import path17 from "node:path";
 
 // src/state/cursor.js
 function normalizeCursor(value) {
@@ -23191,7 +23503,7 @@ function collectSpans(root, chapters) {
   for (const chapter of chapters) {
     let body;
     try {
-      const markdown = fs13.readFileSync(path15.join(root, chapter.path), "utf8");
+      const markdown = fs15.readFileSync(path17.join(root, chapter.path), "utf8");
       body = parseFrontmatter(markdown, chapter.path).body;
     } catch (error) {
       markerDiagnostics.push(issue("CHAPTER_UNREADABLE", "error", `Could not read chapter ${chapter.id}: ${error.message}`, [chapter.id], "structural", "Repair the chapter file so its scene markers can be read."));
@@ -23583,6 +23895,784 @@ function issue(code, severity, message, recordIds, evidence, action2) {
   return { code, severity, message, recordIds, sources: [], evidence, action: action2 };
 }
 
+// src/changes/diff.js
+var TOKEN = /[\p{L}\p{N}_]+|\s+|[^\p{L}\p{N}_\s]/gu;
+function tokenize(buffer) {
+  const tokens = [];
+  let offset = 0;
+  for (const match of buffer.toString("utf8").matchAll(TOKEN)) {
+    const bytes = Buffer.byteLength(match[0], "utf8");
+    tokens.push({ text: match[0], start: offset, end: offset + bytes });
+    offset += bytes;
+  }
+  return tokens;
+}
+function commonPairs(a, b, maxEdits) {
+  const n = a.length;
+  const m = b.length;
+  const offset = n + m;
+  const v = new Int32Array(2 * offset + 2);
+  const trace = [];
+  for (let d = 0;d <= Math.min(n + m, maxEdits); d += 1) {
+    trace.push(v.slice());
+    for (let k = -d;k <= d; k += 2) {
+      let x = k === -d || k !== d && v[offset + k - 1] < v[offset + k + 1] ? v[offset + k + 1] : v[offset + k - 1] + 1;
+      let y = x - k;
+      while (x < n && y < m && a[x].text === b[y].text) {
+        x += 1;
+        y += 1;
+      }
+      v[offset + k] = x;
+      if (x >= n && y >= m)
+        return backtrack(trace, offset, n, m, d);
+    }
+  }
+  return null;
+}
+function backtrack(trace, offset, n, m, depth) {
+  const pairs = [];
+  let x = n;
+  let y = m;
+  for (let d = depth;d > 0; d -= 1) {
+    const v = trace[d];
+    const k = x - y;
+    const prevK = k === -d || k !== d && v[offset + k - 1] < v[offset + k + 1] ? k + 1 : k - 1;
+    const prevX = v[offset + prevK];
+    const prevY = prevX - prevK;
+    while (x > prevX && y > prevY) {
+      x -= 1;
+      y -= 1;
+      pairs.push([x, y]);
+    }
+    x = prevX;
+    y = prevY;
+  }
+  return pairs.reverse();
+}
+function span(tokens, from, to, fallback) {
+  if (from >= to)
+    return { start: fallback, end: fallback };
+  return { start: tokens[from].start, end: tokens[to - 1].end };
+}
+function diffHunks(before, after, options = {}) {
+  const a = tokenize(before);
+  const b = tokenize(after);
+  let prefix = 0;
+  while (prefix < a.length && prefix < b.length && a[prefix].text === b[prefix].text)
+    prefix += 1;
+  let suffix = 0;
+  while (suffix < a.length - prefix && suffix < b.length - prefix && a[a.length - 1 - suffix].text === b[b.length - 1 - suffix].text)
+    suffix += 1;
+  const midA = a.slice(prefix, a.length - suffix);
+  const midB = b.slice(prefix, b.length - suffix);
+  const startA = prefix < a.length ? a[prefix].start : before.length;
+  const startB = prefix < b.length ? b[prefix].start : after.length;
+  if (midA.length === 0 && midB.length === 0)
+    return [];
+  const pairs = options.coarse ? null : commonPairs(midA, midB, options.maxEdits ?? 2000);
+  if (pairs === null) {
+    return [{ before: span(midA, 0, midA.length, startA), after: span(midB, 0, midB.length, startB) }];
+  }
+  const hunks = [];
+  let i = 0;
+  let j = 0;
+  for (const [x, y] of [...pairs, [midA.length, midB.length]]) {
+    if (x > i || y > j) {
+      const beforeAt = i < midA.length ? midA[i].start : midA.length ? midA[midA.length - 1].end : startA;
+      const afterAt = j < midB.length ? midB[j].start : midB.length ? midB[midB.length - 1].end : startB;
+      hunks.push({ before: span(midA, i, x, beforeAt), after: span(midB, j, y, afterAt) });
+    }
+    i = x + 1;
+    j = y + 1;
+  }
+  return hunks;
+}
+
+// src/changes/scope.js
+var EMPTY_HASH = sha256Hex(Buffer.alloc(0));
+function finding2(code, severity, message, sources = [], action2) {
+  return { code, severity, message, recordIds: [], sources, evidence: "structural", action: action2 };
+}
+function isContinuation(buffer, offset) {
+  return offset > 0 && offset < buffer.length && (buffer[offset] & 192) === 128;
+}
+function excerpt(text) {
+  return JSON.stringify(text.length > 80 ? `${text.slice(0, 77)}...` : text);
+}
+function rangeProblems(before, ranges, label) {
+  const problems = [];
+  for (const [index, range] of ranges.entries()) {
+    const where = `${label} range ${index + 1} [${range.start}, ${range.end})`;
+    if (!Number.isInteger(range.start) || !Number.isInteger(range.end) || range.start < 0)
+      problems.push(`${where} needs integer offsets of at least 0`);
+    else if (range.start > range.end)
+      problems.push(`${where} starts after it ends`);
+    else if (range.end > before.length)
+      problems.push(`${where} ends past the baseline's ${before.length} bytes`);
+    else {
+      for (const offset of [range.start, range.end]) {
+        if (isContinuation(before, offset)) {
+          problems.push(`${where}: byte ${offset} is inside a UTF-8 character`);
+          break;
+        }
+      }
+    }
+  }
+  return problems;
+}
+function mergeRanges(ranges) {
+  const sorted = [...ranges].sort((left, right) => left.start - right.start || left.end - right.end);
+  const merged = [];
+  for (const range of sorted) {
+    const last = merged[merged.length - 1];
+    if (last && range.start <= last.end)
+      last.end = Math.max(last.end, range.end);
+    else
+      merged.push({ start: range.start, end: range.end });
+  }
+  return merged;
+}
+function matchRanges(before, after, ranges) {
+  const fixed = [];
+  let cursor = 0;
+  for (const range of ranges) {
+    fixed.push(before.subarray(cursor, range.start));
+    cursor = range.end;
+  }
+  fixed.push(before.subarray(cursor));
+  const head = fixed[0];
+  const tail = fixed[fixed.length - 1];
+  if (head.length + tail.length > after.length)
+    return null;
+  if (!after.subarray(0, head.length).equals(head))
+    return null;
+  if (!after.subarray(after.length - tail.length).equals(tail))
+    return null;
+  const limit = after.length - tail.length;
+  const replacements = [];
+  let position = head.length;
+  for (let index = 1;index < fixed.length - 1; index += 1) {
+    const found = after.subarray(0, limit).indexOf(fixed[index], position);
+    if (found < 0)
+      return null;
+    replacements.push([position, found]);
+    position = found + fixed[index].length;
+  }
+  replacements.push([position, limit]);
+  return replacements.map(([start, end], index) => ({ range: ranges[index], start, end }));
+}
+function covered(hunk, ranges) {
+  return ranges.some((range) => range.start <= hunk.before.start && hunk.before.end <= range.end);
+}
+function violation(path18, before, after, hunk) {
+  return {
+    path: path18,
+    before: { start: hunk.before.start, end: hunk.before.end, text: before.subarray(hunk.before.start, hunk.before.end).toString("utf8") },
+    after: { start: hunk.after.start, end: hunk.after.end, text: after.subarray(hunk.after.start, hunk.after.end).toString("utf8") }
+  };
+}
+function violationFinding(item) {
+  const { path: path18, before, after } = item;
+  return finding2("EDIT_OUT_OF_SCOPE", "error", `${path18} bytes ${before.start}-${before.end} changed outside the allowed ranges: ${excerpt(before.text)} -> ${excerpt(after.text)}`, [
+    { path: path18, start: before.start, end: before.end, hash: sha256Hex(Buffer.from(before.text, "utf8")), kind: "baseline" },
+    { path: path18, start: after.start, end: after.end, hash: sha256Hex(Buffer.from(after.text, "utf8")), kind: "working" }
+  ], "Restore the text outside the declared ranges, or widen the scope explicitly if the author allows it.");
+}
+function markerSequence(buffer) {
+  const { scenes, beats } = findMarkers(buffer.toString("utf8"));
+  return [...scenes.map((item) => [item.start, `scene:${item.id}`]), ...beats.map((item) => [item.start, `beat:${item.id}`])].sort((left, right) => left[0] - right[0]).map((item) => item[1]).join(`
+`);
+}
+function changedSpan(before, after, replacement) {
+  const old = before.subarray(replacement.range.start, replacement.range.end);
+  const next = after.subarray(replacement.start, replacement.end);
+  let prefix = 0;
+  while (prefix < old.length && prefix < next.length && old[prefix] === next[prefix])
+    prefix += 1;
+  let suffix = 0;
+  while (suffix < old.length - prefix && suffix < next.length - prefix && old[old.length - 1 - suffix] === next[next.length - 1 - suffix])
+    suffix += 1;
+  let start = replacement.range.start + prefix;
+  let end = replacement.range.end - suffix;
+  while (isContinuation(before, start))
+    start -= 1;
+  while (end > start && isContinuation(before, end))
+    end += 1;
+  return { start, end };
+}
+function restrictionFindings(path18, before, after, replacements, restriction) {
+  const kinds = restriction === "dialogue" ? new Set(["dialogue"]) : new Set(["dialogue", "tag-or-beat"]);
+  const candidates = dialogueCandidates(before).filter((item) => kinds.has(item.kind));
+  const findings = [];
+  for (const replacement of replacements) {
+    const span2 = changedSpan(before, after, replacement);
+    if (before.subarray(replacement.range.start, replacement.range.end).equals(after.subarray(replacement.start, replacement.end)))
+      continue;
+    if (candidates.some((item) => item.start <= span2.start && span2.end <= item.end))
+      continue;
+    const text = before.subarray(span2.start, span2.end).toString("utf8");
+    findings.push(finding2("DIALOGUE_RESTRICTION_CANDIDATE", "warning", `${path18} bytes ${span2.start}-${span2.end} (${excerpt(text)}) changed outside the quoted ${restriction === "dialogue" ? "dialogue" : "dialogue, tags and beats"} that quote detection found; quote detection is advisory, so verify the change is allowed`, [{ path: path18, start: span2.start, end: span2.end, hash: sha256Hex(Buffer.from(text, "utf8")), kind: "baseline" }], "Check the change against the author's restriction; the declared ranges, not quote detection, decide the scope."));
+  }
+  return findings;
+}
+function checkScope(before, after, fileScope, options = {}) {
+  const path18 = options.path ?? fileScope.path ?? "file";
+  const report = { ok: true, path: path18, changed: after === null || !before.equals(after), replacements: [], violations: [], diagnostics: [] };
+  const fail = (diagnostic3) => {
+    report.diagnostics.push(diagnostic3);
+    report.ok = false;
+    return report;
+  };
+  if (sha256Hex(before) !== fileScope["baseline-hash"]) {
+    return fail(finding2("SCOPE_BASELINE_MISMATCH", "error", `${path18}: the scope's baseline-hash does not match the baseline bytes (${sha256Hex(before)})`, [], "Build the scope against the same baseline revision, or pick the matching --since."));
+  }
+  if (fileScope.ranges === undefined)
+    return report;
+  const problems = rangeProblems(before, fileScope.ranges, path18);
+  if (problems.length > 0) {
+    for (const problem of problems) {
+      report.diagnostics.push(finding2("SCOPE_INVALID", "error", problem, [], "Give each range UTF-8 character-boundary offsets inside the baseline file."));
+    }
+    report.ok = false;
+    return report;
+  }
+  if (after === null) {
+    return fail(finding2("EDIT_OUT_OF_SCOPE", "error", `${path18} was deleted, but its scope allows only the listed ranges to change`, [], "Restore the file, or list it without ranges if the author allows removing it."));
+  }
+  if (!report.changed)
+    return report;
+  const ranges = mergeRanges(fileScope.ranges);
+  const matched = matchRanges(before, after, ranges);
+  if (matched === null) {
+    let hunks = diffHunks(before, after).filter((hunk) => !covered(hunk, ranges));
+    if (hunks.length === 0)
+      hunks = diffHunks(before, after, { coarse: true });
+    for (const hunk of hunks) {
+      const item = violation(path18, before, after, hunk);
+      report.violations.push(item);
+      report.diagnostics.push(violationFinding(item));
+    }
+    report.ok = false;
+    return report;
+  }
+  report.replacements = matched.filter((item) => !before.subarray(item.range.start, item.range.end).equals(after.subarray(item.start, item.end))).map((item) => ({
+    start: item.range.start,
+    end: item.range.end,
+    before: before.subarray(item.range.start, item.range.end).toString("utf8"),
+    after: after.subarray(item.start, item.end).toString("utf8")
+  }));
+  if ((fileScope.markers ?? "locked") === "locked" && markerSequence(before) !== markerSequence(after)) {
+    fail(finding2("MARKER_EDIT_UNDECLARED", "error", `${path18}: the edit adds, removes or renames story scene or beat markers, which this scope does not declare editable`, [], "Restore the markers, or set markers: editable in the scope when the author allows tag or beat edits."));
+  }
+  if (fileScope.restriction !== undefined) {
+    report.diagnostics.push(...restrictionFindings(path18, before, after, matched, fileScope.restriction));
+  }
+  return report;
+}
+var OPENERS = new Map([["“", ["”"]], ["„", ["“", "”"]], ["«", ["»"]], ['"', ['"']]]);
+var MARKER_LINE = /^\s*<!--\s*story-(?:scene|beat):/;
+function dialogueCandidates(buffer) {
+  const text = buffer.toString("utf8");
+  const paragraphs = [];
+  let current = null;
+  let offset = 0;
+  for (const line of text.split(/(?<=\n)/)) {
+    const bytes = Buffer.byteLength(line, "utf8");
+    const content = line.replace(/\r?\n$/, "");
+    if (content.trim() === "" || MARKER_LINE.test(content)) {
+      current = null;
+    } else {
+      if (current === null) {
+        current = { start: offset, text: "" };
+        paragraphs.push(current);
+      }
+      current.text += line;
+    }
+    offset += bytes;
+  }
+  const candidates = [];
+  for (const paragraph of paragraphs)
+    candidates.push(...paragraphCandidates(paragraph.text.replace(/\r?\n$/, ""), paragraph.start));
+  return candidates;
+}
+function paragraphCandidates(text, base) {
+  const pieces = [];
+  let plain = 0;
+  let index = 0;
+  while (index < text.length) {
+    const closers = OPENERS.get(text[index]);
+    if (!closers) {
+      index += 1;
+      continue;
+    }
+    let close = index + 1;
+    while (close < text.length && !closers.includes(text[close]))
+      close += 1;
+    pieces.push(["tag-or-beat", plain, index], ["dialogue", index + 1, close]);
+    index = close + 1;
+    plain = index;
+  }
+  if (pieces.length === 0)
+    return [];
+  pieces.push(["tag-or-beat", plain, text.length]);
+  const found = [];
+  for (const [kind, from, to] of pieces) {
+    const slice = text.slice(from, to);
+    const lead = kind === "dialogue" ? 0 : slice.length - slice.trimStart().length;
+    const value = kind === "dialogue" ? slice : slice.trim();
+    if (value === "")
+      continue;
+    const start = base + Buffer.byteLength(text.slice(0, from + lead), "utf8");
+    found.push({ start, end: start + Buffer.byteLength(value, "utf8"), kind, text: value });
+  }
+  return found;
+}
+function checkScopeSpec(spec, baseline, current) {
+  const invalid2 = validateDocument(spec, "scope");
+  if (invalid2.length > 0) {
+    return {
+      ok: false,
+      files: [],
+      diagnostics: invalid2.map((item) => finding2("SCOPE_INVALID", "error", `scope: ${item.message}`, [], "Fix the scope document to match schemas/scope.schema.json."))
+    };
+  }
+  const diagnostics = [];
+  const files = [];
+  const listed = new Set;
+  for (const entry of spec.files) {
+    if (listed.has(entry.path)) {
+      diagnostics.push(finding2("SCOPE_INVALID", "error", `scope lists ${entry.path} more than once`, [], "List each file once, with all of its ranges."));
+      continue;
+    }
+    listed.add(entry.path);
+    const before = baseline.get(entry.path) ?? Buffer.alloc(0);
+    const after = current.has(entry.path) ? current.get(entry.path) : null;
+    const report = after === null && !baseline.has(entry.path) && entry["baseline-hash"] === EMPTY_HASH ? { ok: true, path: entry.path, changed: false, replacements: [], violations: [], diagnostics: [] } : checkScope(before, after, entry, { path: entry.path });
+    files.push(report);
+    diagnostics.push(...report.diagnostics);
+  }
+  const paths = [...new Set([...baseline.keys(), ...current.keys()])].sort();
+  for (const path18 of paths) {
+    if (listed.has(path18))
+      continue;
+    const before = baseline.get(path18);
+    const after = current.get(path18);
+    if (before && after && before.equals(after))
+      continue;
+    const what = !before ? "was added" : !after ? "was deleted" : "changed";
+    diagnostics.push(finding2("EDIT_OUT_OF_SCOPE", "error", `${path18} ${what} but is not in the scope`, [], "Restore the file, or add it to the scope if the author allows the change."));
+  }
+  return { ok: !diagnostics.some((item) => item.severity === "error"), files, diagnostics };
+}
+
+// src/changes/compare.js
+function finding3(code, severity, message, recordIds, sources, action2) {
+  return { code, severity, message, recordIds, sources, evidence: "structural", action: action2 };
+}
+function canonical(value) {
+  if (Array.isArray(value))
+    return `[${value.map(canonical).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+function changedFields(before, after) {
+  return [...new Set([...Object.keys(before), ...Object.keys(after)])].filter((key) => canonical(before[key]) !== canonical(after[key])).sort(compareText);
+}
+function byId(left, right) {
+  return compareText(left.id, right.id);
+}
+function materialize(files) {
+  const root = fs16.mkdtempSync(path18.join(os.tmpdir(), "story-baseline-"));
+  for (const [file, bytes] of files) {
+    const target = path18.join(root, file);
+    fs16.mkdirSync(path18.dirname(target), { recursive: true });
+    fs16.writeFileSync(target, bytes);
+  }
+  return root;
+}
+function compareFiles(baseline, current) {
+  const added = [];
+  const removed = [];
+  const changed = [];
+  for (const file of [...new Set([...baseline.keys(), ...current.keys()])].sort(compareText)) {
+    const before = baseline.get(file);
+    const after = current.get(file);
+    if (!before)
+      added.push(file);
+    else if (!after)
+      removed.push(file);
+    else if (!before.equals(after))
+      changed.push({ path: file, from: sha256Hex(before), to: sha256Hex(after) });
+  }
+  return { added, removed, changed };
+}
+function compareRecords(before, after) {
+  const added = [];
+  const removed = [];
+  const changed = [];
+  const moved = [];
+  for (const id of [...new Set([...before.records.keys(), ...after.records.keys()])].sort(compareText)) {
+    const old = before.records.get(id);
+    const now = after.records.get(id);
+    if (!old) {
+      added.push({ id, type: now.type, path: now.path });
+    } else if (!now) {
+      removed.push({ id, type: old.type, path: old.path });
+    } else {
+      if (old.path !== now.path)
+        moved.push({ id, type: now.type, from: old.path, to: now.path });
+      if (old.hash !== now.hash) {
+        changed.push({ id, type: now.type, path: now.path, fields: changedFields(old.record, now.record), body: old.body !== now.body });
+      }
+    }
+  }
+  return { added, removed, changed, moved };
+}
+function sceneHash(root, placement) {
+  if (!placement)
+    return null;
+  return sha256Hex(readSourceSpan(root, { path: placement.path, sceneId: placement.sceneId }).bytes);
+}
+function stableScenes(beforeOrder, afterOrder) {
+  const common = new Set(beforeOrder.filter((id) => afterOrder.includes(id)));
+  const a = beforeOrder.filter((id) => common.has(id));
+  const b = afterOrder.filter((id) => common.has(id));
+  const table = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
+  for (let i = a.length - 1;i >= 0; i -= 1) {
+    for (let j = b.length - 1;j >= 0; j -= 1) {
+      table[i][j] = a[i] === b[j] ? table[i + 1][j + 1] + 1 : Math.max(table[i + 1][j], table[i][j + 1]);
+    }
+  }
+  const stable = new Set;
+  for (let i = 0, j = 0;i < a.length && j < b.length; ) {
+    if (a[i] === b[j]) {
+      stable.add(a[i]);
+      i += 1;
+      j += 1;
+    } else if (table[i + 1][j] >= table[i][j + 1]) {
+      i += 1;
+    } else {
+      j += 1;
+    }
+  }
+  return stable;
+}
+function compareScenes(before, after) {
+  const place = (project) => {
+    const chronology = buildChronology(project);
+    const placements = new Map(chronology.readingOrder.map((item) => [item.sceneId, item]));
+    const chapters = new Map(chronology.scenes.map((scene) => [scene.id, scene.chapterId]));
+    return { chapters, placements, order: chronology.readingOrder.map((item) => item.sceneId) };
+  };
+  const old = place(before);
+  const now = place(after);
+  const location = (side, id) => {
+    const placement = side.placements.get(id);
+    return placement ? { chapterId: placement.chapterId, path: placement.path, position: placement.position } : { chapterId: side.chapters.get(id) ?? null, path: null, position: null };
+  };
+  const summary = (side, id) => {
+    const { chapterId, path: file } = location(side, id);
+    return { id, chapterId, path: file };
+  };
+  const stable = stableScenes(old.order, now.order);
+  const result = { added: [], removed: [], changed: [], moved: [] };
+  const ids = (project) => [...project.records.values()].filter((entry) => entry.type === "scene").map((entry) => entry.id);
+  for (const id of [...new Set([...ids(before), ...ids(after)])].sort(compareText)) {
+    const inBefore = before.records.get(id)?.type === "scene";
+    const inAfter = after.records.get(id)?.type === "scene";
+    if (!inBefore) {
+      result.added.push(summary(now, id));
+      continue;
+    }
+    if (!inAfter) {
+      result.removed.push(summary(old, id));
+      continue;
+    }
+    const from = location(old, id);
+    const to = location(now, id);
+    if (from.chapterId !== to.chapterId || from.path !== to.path || from.position !== null && to.position !== null && !stable.has(id)) {
+      result.moved.push({ id, from, to });
+    }
+    const fromHash = sceneHash(before.root, old.placements.get(id));
+    const toHash = sceneHash(after.root, now.placements.get(id));
+    if (fromHash !== null && toHash !== null && fromHash !== toHash) {
+      result.changed.push({ id, from: { hash: fromHash }, to: { hash: toHash } });
+    }
+  }
+  return result;
+}
+function compareFacts(before, after) {
+  const facts = (project) => new Map([...project.records.values()].filter((entry) => entry.type === "fact").map((entry) => [entry.id, entry]));
+  const old = facts(before);
+  const now = facts(after);
+  const added = [...now.keys()].filter((id) => !old.has(id)).sort(compareText);
+  const removed = [...old.keys()].filter((id) => !now.has(id)).sort(compareText);
+  const changed = [];
+  for (const id of [...now.keys()].filter((key) => old.has(key)).sort(compareText)) {
+    const fields = changedFields(old.get(id).record, now.get(id).record);
+    if (fields.length === 0)
+      continue;
+    const pick = (record) => Object.fromEntries(fields.filter((field) => record[field] !== undefined).map((field) => [field, record[field]]));
+    changed.push({ id, fields, from: pick(old.get(id).record), to: pick(now.get(id).record) });
+  }
+  return { added, removed, changed };
+}
+function spanHash(root, ref) {
+  try {
+    return { hash: sha256Hex(readSourceSpan(root, { path: ref.path, sceneId: ref.scene, beatId: ref.beat }).bytes), error: null };
+  } catch (error) {
+    return { hash: null, error };
+  }
+}
+function removalReason(after, ref, error) {
+  if (!fs16.existsSync(path18.join(after.root, ref.path)))
+    return `file ${ref.path} was deleted`;
+  if (error.code === "SCENE_NOT_FOUND")
+    return `scene ${ref.scene} was removed`;
+  if (error.code === "BEAT_NOT_FOUND")
+    return `beat ${ref.beat} was removed from scene ${ref.scene}`;
+  return `it cannot be read: ${error.message}`;
+}
+function compareSources(baselineRoot, after) {
+  const sources = [];
+  const diagnostics = [];
+  for (const entry of [...after.records.values()].sort(byId)) {
+    for (const field of ["sources", "evidence"]) {
+      const refs = Array.isArray(entry.record[field]) ? entry.record[field] : [];
+      for (const source of refs) {
+        if (source === null || typeof source !== "object" || typeof source.path !== "string")
+          continue;
+        const ref = { path: source.path };
+        if (source.scene)
+          ref.scene = source.scene;
+        if (source.beat)
+          ref.beat = source.beat;
+        const current = spanHash(after.root, ref);
+        const baseline = spanHash(baselineRoot, ref);
+        const item = { recordId: entry.id, field, ref, recorded: source.hash ?? null, baseline: baseline.hash, current: current.hash };
+        const inMemory = { path: ref.path, hash: source.hash, kind: source.kind };
+        if (ref.scene)
+          inMemory.sceneId = ref.scene;
+        if (ref.beat)
+          inMemory.beatId = ref.beat;
+        if (current.hash === null) {
+          sources.push({ ...item, status: "removed" });
+          diagnostics.push(finding3("SOURCE_REMOVED", "error", `${entry.path}: ${field} cites ${describe2(ref)}, but ${removalReason(after, ref, current.error)}`, [entry.id, ...ref.scene && current.error.code === "SCENE_NOT_FOUND" ? [ref.scene] : []], [inMemory], "Point the record at evidence that still exists, or restore the removed source."));
+        } else if (baseline.hash !== null && baseline.hash !== current.hash) {
+          sources.push({ ...item, status: "changed" });
+          if (source.hash !== current.hash) {
+            diagnostics.push(finding3("STALE_EVIDENCE", "warning", `${entry.path}: ${field} cites ${describe2(ref)}, which changed since the baseline`, [entry.id], [inMemory], "Re-read the changed evidence, then refresh the stored hash or revise the record."));
+          }
+        }
+      }
+    }
+  }
+  return { sources, diagnostics };
+}
+function describe2(ref) {
+  if (ref.beat)
+    return `beat ${ref.beat} of scene ${ref.scene} in ${ref.path}`;
+  if (ref.scene)
+    return `scene ${ref.scene} in ${ref.path}`;
+  return ref.path;
+}
+function compareRevision(project, resolved, options = {}) {
+  const after = typeof project === "string" ? loadProjectSync(project) : project;
+  const baselineRoot = materialize(resolved.files);
+  try {
+    const before = loadProjectSync(baselineRoot);
+    const records = compareRecords(before, after);
+    const { sources, diagnostics } = compareSources(baselineRoot, after);
+    const removedIds = new Set(records.removed.map((item) => item.id));
+    const dangling = after.diagnostics.filter((item) => item.code === "DANGLING_REFERENCE" && removedIds.has(item.recordIds[0]));
+    const scope = options.scope === undefined ? null : checkScopeSpec(options.scope, resolved.files, resolved.current);
+    return {
+      baseline: resolved.baseline,
+      files: compareFiles(resolved.files, resolved.current),
+      ...records,
+      scenes: compareScenes(before, after),
+      facts: compareFacts(before, after),
+      sources,
+      scope: scope && { ok: scope.ok, files: scope.files },
+      diagnostics: [...scope?.diagnostics ?? [], ...diagnostics, ...dangling]
+    };
+  } finally {
+    fs16.rmSync(baselineRoot, { recursive: true, force: true });
+  }
+}
+
+// src/cli/handlers/snapshot.js
+import fs17 from "node:fs";
+import path19 from "node:path";
+var COMMAND = "snapshot";
+function baselineFailure(command, error) {
+  const diagnostics = [finding({
+    code: error.code,
+    message: error.message,
+    action: ACTIONS3[error.code] ?? "Fix the reported problem and run the command again."
+  })];
+  return {
+    envelope: envelope({ command, ok: false, diagnostics }),
+    exitCode: error.exitCode ?? 1,
+    text: `${error.message}
+`
+  };
+}
+var ACTIONS3 = {
+  SNAPSHOT_EXISTS: "Snapshots are immutable; choose a new name.",
+  SNAPSHOT_NAME_INVALID: "Use letters, digits, dot, underscore and hyphen, starting with a letter or digit.",
+  SNAPSHOT_CORRUPT: "Restore the snapshot from a backup or take a new snapshot under another name.",
+  BASELINE_NOT_FOUND: "Take one with story snapshot <name>, or name an existing Git branch, tag or commit.",
+  BASELINE_AMBIGUOUS: "Prefix the name with snapshot: or git:.",
+  BASELINE_INVALID: "Pass --since git:<ref> or --since snapshot:<name>.",
+  REF_AMBIGUOUS: "Name the ref in full, such as refs/heads/<name> or refs/tags/<name>.",
+  NOT_A_GIT_REPOSITORY: "Use a snapshot baseline, or run the command inside a Git working tree.",
+  GIT_FAILED: "Check the repository with git fsck, then run the command again."
+};
+function snapshotCommand(ctx) {
+  return present(ctx, snapshotResult(ctx.root(), ctx.parsed.positionals[1], isTruthy(ctx.parsed.options["dry-run"])));
+}
+function snapshotResult(root, name, dryRun) {
+  if (!fs17.existsSync(path19.join(root, "story.md"))) {
+    return failure(COMMAND, `No story project at ${root}: missing story.md`, "PROJECT_NOT_FOUND", 2);
+  }
+  let result;
+  try {
+    result = createSnapshot(root, name, { dryRun });
+  } catch (error) {
+    return baselineFailure(COMMAND, error);
+  }
+  const { snapshot } = result;
+  const verb = dryRun ? "Would write snapshot" : "Snapshot";
+  return {
+    envelope: envelope({
+      command: COMMAND,
+      ok: true,
+      data: { snapshot, dryRun: result.dryRun },
+      writes: result.writes.map((write) => ({ ...write, expectedHash: null }))
+    }),
+    exitCode: 0,
+    text: `${verb} ${snapshot.name}: ${snapshot.files} files, ${snapshot.bytes} bytes, hash ${snapshot.hash.slice(0, 12)} (${snapshot.path})
+`
+  };
+}
+
+// src/cli/handlers/changes.js
+var COMMAND2 = "changes";
+function optionValue2(value) {
+  return Array.isArray(value) ? value[value.length - 1] : value;
+}
+function scopeInvalid(message) {
+  const diagnostics = [finding({ code: "SCOPE_INVALID", message, action: "Pass --scope a JSON ScopeSpec file (schemas/scope.schema.json)." })];
+  return { envelope: envelope({ command: COMMAND2, ok: false, diagnostics }), exitCode: 2, text: `${message}
+` };
+}
+function readScope(cwd, file) {
+  let raw;
+  try {
+    raw = fs18.readFileSync(path20.resolve(cwd, String(file)), "utf8");
+  } catch (error) {
+    return { error: scopeInvalid(`Cannot read --scope ${file}: ${error.message}`) };
+  }
+  try {
+    return { scope: JSON.parse(raw) };
+  } catch (error) {
+    return { error: scopeInvalid(`--scope ${file} is not JSON: ${error.message}`) };
+  }
+}
+function baselineText(baseline) {
+  return baseline.kind === "git" ? `git ${baseline.ref} (commit ${baseline.commit.slice(0, 12)})` : `snapshot ${baseline.name} (hash ${baseline.hash.slice(0, 12)})`;
+}
+function refText(ref) {
+  if (ref.beat)
+    return `${ref.path}#${ref.scene}/${ref.beat}`;
+  if (ref.scene)
+    return `${ref.path}#${ref.scene}`;
+  return ref.path;
+}
+function placeText(place) {
+  return place.path === null ? `${place.chapterId ?? "no chapter"} (unplaced)` : `${place.chapterId} #${place.position}`;
+}
+function section(lines, title, entries) {
+  if (entries.length === 0)
+    return;
+  lines.push(`${title}:`, ...entries.map((entry) => `  ${entry}`));
+}
+function reportText(report) {
+  const lines = [`Changes since ${baselineText(report.baseline)}`];
+  const { files } = report;
+  const any = files.added.length + files.removed.length + files.changed.length > 0;
+  lines.push(any ? `Files: ${files.added.length} added, ${files.removed.length} removed, ${files.changed.length} changed` : "No changes.");
+  section(lines, "Records", [
+    ...report.added.map((item) => `added ${item.id} (${item.type}): ${item.path}`),
+    ...report.removed.map((item) => `removed ${item.id} (${item.type}): ${item.path}`),
+    ...report.moved.map((item) => `moved ${item.id}: ${item.from} -> ${item.to}`),
+    ...report.changed.map((item) => `changed ${item.id}: ${[...item.fields, ...item.body ? ["body"] : []].join(", ") || "formatting"}`)
+  ]);
+  section(lines, "Scenes", [
+    ...report.scenes.added.map((item) => `added ${item.id} in ${item.chapterId ?? "no chapter"}`),
+    ...report.scenes.removed.map((item) => `removed ${item.id} from ${item.chapterId ?? "no chapter"}`),
+    ...report.scenes.moved.map((item) => `moved ${item.id}: ${placeText(item.from)} -> ${placeText(item.to)}`),
+    ...report.scenes.changed.map((item) => `changed ${item.id}: prose ${item.from.hash.slice(0, 12)} -> ${item.to.hash.slice(0, 12)}`)
+  ]);
+  section(lines, "Facts", [
+    ...report.facts.added.map((id) => `added ${id}`),
+    ...report.facts.removed.map((id) => `removed ${id}`),
+    ...report.facts.changed.map((item) => `changed ${item.id}: ${item.fields.join(", ")}`)
+  ]);
+  section(lines, "Sources", report.sources.map((item) => `${item.status} ${item.recordId} ${item.field}: ${refText(item.ref)}`));
+  if (report.scope) {
+    const violations = report.diagnostics.filter((item) => item.code === "EDIT_OUT_OF_SCOPE").length;
+    lines.push(report.scope.ok ? "Scope: all changes are inside the declared ranges" : `Scope: ${violations} violation${violations === 1 ? "" : "s"}`);
+  }
+  section(lines, "Diagnostics", report.diagnostics.map((item) => `${item.severity} ${item.code}: ${item.message}`));
+  return `${lines.join(`
+`)}
+`;
+}
+function exitCodeFor(diagnostics) {
+  const codes = new Set(diagnostics.map((item) => item.code));
+  if (codes.has("SCOPE_INVALID"))
+    return 2;
+  if (codes.has("SCOPE_BASELINE_MISMATCH"))
+    return 3;
+  return diagnostics.some((item) => item.severity === "error") ? 1 : 0;
+}
+function changesCommand(ctx) {
+  return present(ctx, changesResult(ctx.root(), ctx.cwd, ctx.parsed.options));
+}
+function changesResult(root, cwd, options) {
+  let scope;
+  const scopeFile = optionValue2(options.scope);
+  if (scopeFile !== undefined) {
+    const read = readScope(cwd, scopeFile);
+    if (read.error)
+      return read.error;
+    scope = read.scope;
+  }
+  const opened = openProject(root, COMMAND2);
+  if (opened.error)
+    return opened.error;
+  let report;
+  try {
+    report = compareRevision(opened.project, resolveBaseline(root, String(optionValue2(options.since))), { scope });
+  } catch (error) {
+    return baselineFailure(COMMAND2, error);
+  }
+  const exitCode = exitCodeFor(report.diagnostics);
+  return {
+    envelope: envelope({ command: COMMAND2, ok: exitCode === 0, data: report, diagnostics: report.diagnostics }),
+    exitCode,
+    text: reportText(report)
+  };
+}
+
+// src/context/cache.js
+import fs23 from "node:fs";
+import path24 from "node:path";
+
 // src/context/budget.js
 var OVER_BUDGET = "over the byte budget";
 function packetBytes(packet) {
@@ -23663,16 +24753,16 @@ function fitBudget(header, candidates, maxBytes, diagnostics) {
 }
 
 // src/context/select.js
-import fs17 from "node:fs";
+import fs22 from "node:fs";
 
 // src/memory/decisions.js
-import fs15 from "node:fs";
-import path17 from "node:path";
+import fs20 from "node:fs";
+import path22 from "node:path";
 
 // src/memory/common.js
-import fs14 from "node:fs";
-import path16 from "node:path";
-function invalid(command, message) {
+import fs19 from "node:fs";
+import path21 from "node:path";
+function invalid2(command, message) {
   return failure(command, message, "INVALID_INVOCATION", 2);
 }
 function findingsResult(command, diagnostics, exitCode) {
@@ -23687,18 +24777,18 @@ function findingsResult(command, diagnostics, exitCode) {
 function readData(command, cwd, dataPath) {
   let raw;
   try {
-    raw = fs14.readFileSync(path16.resolve(cwd, String(dataPath)), "utf8");
+    raw = fs19.readFileSync(path21.resolve(cwd, String(dataPath)), "utf8");
   } catch (error) {
-    return { error: invalid(command, `Cannot read --data ${dataPath}: ${error.message}`) };
+    return { error: invalid2(command, `Cannot read --data ${dataPath}: ${error.message}`) };
   }
   let data;
   try {
     data = JSON.parse(raw);
   } catch (error) {
-    return { error: invalid(command, `--data ${dataPath} is not JSON: ${error.message}`) };
+    return { error: invalid2(command, `--data ${dataPath} is not JSON: ${error.message}`) };
   }
   if (data === null || typeof data !== "object" || Array.isArray(data)) {
-    return { error: invalid(command, `--data ${dataPath} must hold one JSON object`) };
+    return { error: invalid2(command, `--data ${dataPath} must hold one JSON object`) };
   }
   return { data };
 }
@@ -23723,8 +24813,8 @@ function hashRefs(command, root, record, field, refresh = false) {
   return null;
 }
 function takenNames(root, directory) {
-  const absolute = path16.join(root, directory);
-  return new Set(fs14.existsSync(absolute) ? fs14.readdirSync(absolute) : []);
+  const absolute = path21.join(root, directory);
+  return new Set(fs19.existsSync(absolute) ? fs19.readdirSync(absolute) : []);
 }
 function writeResult(command, root, writes, options, success) {
   try {
@@ -23741,12 +24831,12 @@ function writeResult(command, root, writes, options, success) {
 }
 
 // src/memory/decisions.js
-var byId = (left, right) => left.id.localeCompare(right.id, "en");
+var byId2 = (left, right) => left.id.localeCompare(right.id, "en");
 function list(value) {
   return Array.isArray(value) ? value.filter((item) => typeof item === "string") : [];
 }
 function decisionEntries(project) {
-  return [...project.records.values()].filter((entry) => entry.type === "decision").sort(byId);
+  return [...project.records.values()].filter((entry) => entry.type === "decision").sort(byId2);
 }
 function projectId(project) {
   return [...project.records.values()].find((entry) => entry.type === "project")?.id;
@@ -23867,9 +24957,9 @@ function newRecord(project, data, defaults) {
 }
 function recordProblem(command, project, record) {
   if (record.type !== "decision")
-    return invalid(command, `${command} creates records of type decision`);
+    return invalid2(command, `${command} creates records of type decision`);
   if (typeof record.id !== "string" || !ID_PATTERN.test(record.id))
-    return invalid(command, `Invalid id: ${record.id}`);
+    return invalid2(command, `Invalid id: ${record.id}`);
   if (project.records.has(record.id)) {
     return failure(command, `Record id ${record.id} is already used`, "DUPLICATE_RECORD_ID", 1, [record.id]);
   }
@@ -23895,7 +24985,7 @@ function ownDangling(project, id) {
 function addDecision(root, options = {}) {
   const command = "decision add";
   if (options.dataPath === undefined)
-    return invalid(command, "Usage: story decision add --data <json-file>");
+    return invalid2(command, "Usage: story decision add --data <json-file>");
   const opened = openProject(root, command);
   if (opened.error)
     return opened.error;
@@ -23911,13 +25001,13 @@ function addDecision(root, options = {}) {
   if (problem)
     return problem;
   if (!NEW_STATUSES.has(record.status)) {
-    return invalid(command, "A new decision is proposed, accepted, or rejected; use decision supersede to replace one");
+    return invalid2(command, "A new decision is proposed, accepted, or rejected; use decision supersede to replace one");
   }
   if (record.supersedes !== undefined) {
-    return invalid(command, "Use story decision supersede <id> to replace a decision; decision add does not write supersedes");
+    return invalid2(command, "Use story decision supersede <id> to replace a decision; decision add does not write supersedes");
   }
   if (!Array.isArray(record["scope-ids"]) || record["scope-ids"].length === 0) {
-    return invalid(command, "A decision needs scope-ids: the project id, record ids, or scene ids it applies to");
+    return invalid2(command, "A decision needs scope-ids: the project id, record ids, or scene ids it applies to");
   }
   const schema = schemaProblem(command, record);
   if (schema)
@@ -23981,7 +25071,7 @@ function listDecisions(root, options = {}) {
 function supersedeDecision(root, id, options = {}) {
   const command = "decision supersede";
   if (!id || options.dataPath === undefined)
-    return invalid(command, "Usage: story decision supersede <id> --data <json-file>");
+    return invalid2(command, "Usage: story decision supersede <id> --data <json-file>");
   const opened = openProject(root, command);
   if (opened.error)
     return opened.error;
@@ -24001,7 +25091,7 @@ function supersedeDecision(root, id, options = {}) {
     return read.error;
   const supplied = read.data.supersedes;
   if (supplied !== undefined && !(Array.isArray(supplied) && supplied.length === 1 && supplied[0] === id)) {
-    return invalid(command, `A successor supersedes exactly ${id}; leave supersedes out of --data`);
+    return invalid2(command, `A successor supersedes exactly ${id}; leave supersedes out of --data`);
   }
   const record = newRecord(project, read.data, { status: "accepted", "scope-ids": prior.record["scope-ids"] });
   record.supersedes = [id];
@@ -24009,7 +25099,7 @@ function supersedeDecision(root, id, options = {}) {
   if (problem)
     return problem;
   if (record.status !== "accepted") {
-    return invalid(command, "A successor is accepted. Record an alternative that is only proposed with decision add");
+    return invalid2(command, "A successor is accepted. Record an alternative that is only proposed with decision add");
   }
   const schema = schemaProblem(command, record);
   if (schema)
@@ -24023,8 +25113,8 @@ function supersedeDecision(root, id, options = {}) {
   ];
   if (problems.length > 0)
     return findingsResult(command, problems, 1);
-  const priorPath = prior.path.split(path17.sep).join("/");
-  const markdown = fs15.readFileSync(path17.join(root, prior.path), "utf8");
+  const priorPath = prior.path.split(path22.sep).join("/");
+  const markdown = fs20.readFileSync(path22.join(root, prior.path), "utf8");
   const writes = [
     { path: entry.path, action: "create", expectedHash: null, content: stringifyFrontmatter(record) },
     { path: priorPath, action: "replace", expectedHash: prior.hash, content: replaceFrontmatter(markdown, { ...parseFrontmatter(markdown, prior.path).data, status: "superseded" }) }
@@ -24040,9 +25130,9 @@ function supersedeDecision(root, id, options = {}) {
 }
 
 // src/memory/issues.js
-import fs16 from "node:fs";
-import path18 from "node:path";
-var byId2 = (left, right) => left.id.localeCompare(right.id, "en");
+import fs21 from "node:fs";
+import path23 from "node:path";
+var byId3 = (left, right) => left.id.localeCompare(right.id, "en");
 function list2(value) {
   return Array.isArray(value) ? value.filter((item) => typeof item === "string") : [];
 }
@@ -24050,7 +25140,7 @@ function evidenceList(record) {
   return Array.isArray(record.evidence) ? record.evidence.filter((item) => item && typeof item === "object" && typeof item.path === "string") : [];
 }
 function issueEntries(project) {
-  return [...project.records.values()].filter((entry) => entry.type === "issue").sort(byId2);
+  return [...project.records.values()].filter((entry) => entry.type === "issue").sort(byId3);
 }
 function currentHash(root, ref) {
   try {
@@ -24182,7 +25272,7 @@ function describeIssue(issue2) {
 function addIssue(root, options = {}) {
   const command = "issue add";
   if (options.dataPath === undefined)
-    return invalid(command, "Usage: story issue add --data <json-file>");
+    return invalid2(command, "Usage: story issue add --data <json-file>");
   const opened = openProject(root, command);
   if (opened.error)
     return opened.error;
@@ -24195,18 +25285,18 @@ function addIssue(root, options = {}) {
     return read.error;
   const record = { format: FORMAT, "schema-version": SCHEMA_VERSION, id: read.data.id, type: "issue", status: "open", ...read.data };
   if (record.type !== "issue")
-    return invalid(command, "issue add creates records of type issue");
+    return invalid2(command, "issue add creates records of type issue");
   if (record.id === undefined)
     record.id = allocateId("issue", new Set(project.records.keys()));
   if (typeof record.id !== "string" || !ID_PATTERN.test(record.id))
-    return invalid(command, `Invalid id: ${record.id}`);
+    return invalid2(command, `Invalid id: ${record.id}`);
   if (project.records.has(record.id)) {
     return failure(command, `Record id ${record.id} is already used`, "DUPLICATE_RECORD_ID", 1, [record.id]);
   }
   if (record.status !== "open")
-    return invalid(command, "A new issue is open; use issue resolve or issue dismiss to close it");
+    return invalid2(command, "A new issue is open; use issue resolve or issue dismiss to close it");
   if (record.dismissal !== undefined)
-    return invalid(command, "Use story issue dismiss <id> to dismiss an issue");
+    return invalid2(command, "Use story issue dismiss <id> to dismiss an issue");
   const unreadable = hashRefs(command, root, record, "evidence");
   if (unreadable)
     return unreadable;
@@ -24286,11 +25376,11 @@ function reopenedLine(issue2) {
 }
 function transition(command, root, target, data, history, options, verb) {
   const { entry, issue: issue2 } = target;
-  const markdown = fs16.readFileSync(path18.join(root, entry.path), "utf8");
+  const markdown = fs21.readFileSync(path23.join(root, entry.path), "utf8");
   const parsed = parseFrontmatter(markdown, entry.path);
   const lines = issue2.reopened ? [reopenedLine(issue2), history] : [history];
   const content = replaceFrontmatter(markdown, { ...parsed.data, ...data }, appendHistory(parsed.body, lines));
-  const relative3 = entry.path.split(path18.sep).join("/");
+  const relative3 = entry.path.split(path23.sep).join("/");
   return writeResult(command, root, [{ path: relative3, action: "replace", expectedHash: entry.hash, content }], options, {
     data: { id: entry.id, path: relative3, from: "open", to: data.status, reopened: issue2.reopened },
     text: `${verb} issue ${entry.id}: ${relative3}
@@ -24305,7 +25395,7 @@ function optionalData(command, options) {
 function resolveIssue(root, id, options = {}) {
   const command = "issue resolve";
   if (!id)
-    return invalid(command, "Usage: story issue resolve <id> [--data <json-file>]");
+    return invalid2(command, "Usage: story issue resolve <id> [--data <json-file>]");
   const target = openIssue(command, root, id);
   if (target.error)
     return target.error;
@@ -24314,10 +25404,10 @@ function resolveIssue(root, id, options = {}) {
     return read.error;
   const extra = Object.keys(read.data).filter((key) => key !== "reason");
   if (extra.length > 0)
-    return invalid(command, `issue resolve --data accepts only reason, not ${extra.join(", ")}`);
+    return invalid2(command, `issue resolve --data accepts only reason, not ${extra.join(", ")}`);
   const reason = read.data.reason;
   if (reason !== undefined && (typeof reason !== "string" || reason === "")) {
-    return invalid(command, "reason must be non-empty text");
+    return invalid2(command, "reason must be non-empty text");
   }
   const history = reason === undefined ? "resolved" : `resolved: ${reason}`;
   return transition(command, root, target, { status: "resolved", dismissal: undefined }, history, options, "Resolved");
@@ -24325,7 +25415,7 @@ function resolveIssue(root, id, options = {}) {
 function dismissIssue(root, id, options = {}) {
   const command = "issue dismiss";
   if (!id || options.dataPath === undefined)
-    return invalid(command, "Usage: story issue dismiss <id> --data <json-file>");
+    return invalid2(command, "Usage: story issue dismiss <id> --data <json-file>");
   const target = openIssue(command, root, id);
   if (target.error)
     return target.error;
@@ -24335,13 +25425,13 @@ function dismissIssue(root, id, options = {}) {
   const dismissal = read.data;
   const extra = Object.keys(dismissal).filter((key) => !DISMISSAL_KEYS.has(key));
   if (extra.length > 0)
-    return invalid(command, `issue dismiss --data accepts code, record-id and reason, not ${extra.join(", ")}`);
+    return invalid2(command, `issue dismiss --data accepts code, record-id and reason, not ${extra.join(", ")}`);
   if (typeof dismissal.code !== "string" || dismissal.code === "")
-    return invalid(command, "A dismissal names one exact diagnostic code");
+    return invalid2(command, "A dismissal names one exact diagnostic code");
   if (typeof dismissal.reason !== "string" || dismissal.reason === "")
-    return invalid(command, "A dismissal needs a reason");
+    return invalid2(command, "A dismissal needs a reason");
   if (dismissal["record-id"] !== undefined && typeof dismissal["record-id"] !== "string")
-    return invalid(command, "record-id must be a record id");
+    return invalid2(command, "record-id must be a record id");
   const record = { ...target.entry.record, status: "dismissed", dismissal };
   const unbound = unboundReason(record);
   if (unbound !== null) {
@@ -24634,10 +25724,10 @@ function resolveState(project, cursor, options = {}) {
   for (const entry of factEntries(project)) {
     if (entry.record.status !== "established")
       continue;
-    const invalid2 = validateFact(project, entry);
-    if (invalid2.length > 0) {
-      diagnostics.push(...invalid2);
-      unresolved.push(unresolvedItem(entry, "FACT_INVALID", invalid2.map((item) => item.message).join("; ")));
+    const invalid3 = validateFact(project, entry);
+    if (invalid3.length > 0) {
+      diagnostics.push(...invalid3);
+      unresolved.push(unresolvedItem(entry, "FACT_INVALID", invalid3.map((item) => item.message).join("; ")));
       continue;
     }
     const problem = provenanceProblem(project.root, entry);
@@ -24693,11 +25783,11 @@ function resolveState(project, cursor, options = {}) {
     }
   }
   diagnostics.push(...chronology.diagnostics.slice(before));
-  const byId3 = (left, right) => left.id.localeCompare(right.id, "en");
+  const byId4 = (left, right) => left.id.localeCompare(right.id, "en");
   return {
-    facts: facts.sort(byId3),
+    facts: facts.sort(byId4),
     conflicts: conflicts.sort((left, right) => left.subject.localeCompare(right.subject, "en") || left.predicate.localeCompare(right.predicate, "en")),
-    unresolved: unresolved.sort(byId3),
+    unresolved: unresolved.sort(byId4),
     diagnostics
   };
 }
@@ -24805,7 +25895,7 @@ var ENTITY_TYPES3 = new Set(["character", ...WORLD_TYPES]);
 var STYLE_TASKS = new Set(["draft", "revise", "review", "image"]);
 var IMPACT_TASKS = new Set(["revise", "review"]);
 var NOT_WRITER_KNOWLEDGE = "for revision impact only; not writer knowledge at the cursor";
-var byId3 = (left, right) => left.id.localeCompare(right.id, "en");
+var byId4 = (left, right) => left.id.localeCompare(right.id, "en");
 var slash3 = (value) => value.split("\\").join("/");
 function kindFor(type) {
   if (ENTITY_TYPES3.has(type))
@@ -24885,11 +25975,11 @@ class Selection {
     this.diagnostics = [];
     this.fatal = false;
   }
-  add(item, { priority, required = false, retrieval = item.id, section = "items" }) {
+  add(item, { priority, required = false, retrieval = item.id, section: section2 = "items" }) {
     if (this.seen.has(item.id))
       return;
     this.seen.add(item.id);
-    this.candidates.push({ item: { ...item, required }, priority, required, retrieval, section });
+    this.candidates.push({ item: { ...item, required }, priority, required, retrieval, section: section2 });
   }
   addRecord(entry, reason, options, kind = kindFor(entry.type)) {
     this.add({
@@ -24906,7 +25996,7 @@ class Selection {
     this.fatal = true;
   }
   entries(predicate) {
-    return [...this.project.records.values()].filter(predicate).sort(byId3);
+    return [...this.project.records.values()].filter(predicate).sort(byId4);
   }
   prose(sceneId, { beatId, until } = {}) {
     const scene = this.order.get(sceneId);
@@ -24935,10 +26025,10 @@ class Selection {
     return { content: bytes.toString("utf8"), sources: [source] };
   }
   addProse(sceneId, reason, options, spanOptions = {}, id = `prose:${sceneId}`, kind = "prose") {
-    const span = this.prose(sceneId, spanOptions);
-    if (span === null)
+    const span2 = this.prose(sceneId, spanOptions);
+    if (span2 === null)
       return;
-    this.add({ id, kind, reason, required: false, sources: span.sources, content: span.content }, { retrieval: sceneId, ...options });
+    this.add({ id, kind, reason, required: false, sources: span2.sources, content: span2.content }, { retrieval: sceneId, ...options });
   }
   constraints() {
     this.request.constraints.forEach((text, index) => {
@@ -25025,7 +26115,7 @@ class Selection {
     for (const relative3 of paths) {
       let bytes;
       try {
-        bytes = fs17.readFileSync(resolveWithinRoot(this.project.root, relative3));
+        bytes = fs22.readFileSync(resolveWithinRoot(this.project.root, relative3));
       } catch (error) {
         this.diagnostics.push({
           code: "STYLE_SOURCE_UNREADABLE",
@@ -25438,11 +26528,11 @@ function buildContext(project, input) {
 
 // src/context/cache.js
 var CACHE_VERSION = 1;
-var CACHE_DIRECTORY = path19.join(".story", "cache", "context");
+var CACHE_DIRECTORY = path24.join(".story", "cache", "context");
 var slash4 = (value) => value.split("\\").join("/");
 function fileHash(root, relative3) {
   try {
-    return sha256Hex(fs18.readFileSync(resolveWithinRoot(root, relative3)));
+    return sha256Hex(fs23.readFileSync(resolveWithinRoot(root, relative3)));
   } catch {
     return null;
   }
@@ -25482,7 +26572,7 @@ function keyFor(project, request, schemaVersion) {
 }
 function readEntry(file, key, schemaVersion) {
   try {
-    const entry = JSON.parse(fs18.readFileSync(file, "utf8"));
+    const entry = JSON.parse(fs23.readFileSync(file, "utf8"));
     if (entry.cacheVersion !== CACHE_VERSION || entry.schemaVersion !== schemaVersion || entry.key !== key)
       return null;
     if (!entry.packet || typeof entry.packet !== "object")
@@ -25494,20 +26584,20 @@ function readEntry(file, key, schemaVersion) {
 }
 function removeQuietly(file) {
   try {
-    fs18.rmSync(file, { force: true });
+    fs23.rmSync(file, { force: true });
   } catch {}
 }
 function writeEntry(root, file, entry) {
   const temporary = `${file}.${process.pid}.${Date.now()}.tmp`;
   try {
     assertWritableTarget(root, file);
-    fs18.mkdirSync(path19.dirname(file), { recursive: true });
-    fs18.writeFileSync(temporary, JSON.stringify(entry));
-    fs18.renameSync(temporary, file);
+    fs23.mkdirSync(path24.dirname(file), { recursive: true });
+    fs23.writeFileSync(temporary, JSON.stringify(entry));
+    fs23.renameSync(temporary, file);
     return null;
   } catch (error) {
     removeQuietly(temporary);
-    return `Context cache not written to ${slash4(path19.relative(root, file))}: ${error.message}`;
+    return `Context cache not written to ${slash4(path24.relative(root, file))}: ${error.message}`;
   }
 }
 function cachedContext(project, input, options = {}) {
@@ -25516,7 +26606,7 @@ function cachedContext(project, input, options = {}) {
   if (problems.length > 0)
     return { packet: buildContext(project, input), cache: { hit: false, key: null, stored: false } };
   const key = keyFor(project, request, schemaVersion);
-  const file = path19.join(project.root, CACHE_DIRECTORY, `${key}.json`);
+  const file = path24.join(project.root, CACHE_DIRECTORY, `${key}.json`);
   const cached = readEntry(file, key, schemaVersion);
   if (cached)
     return { packet: cached, cache: { hit: true, key, stored: true } };
@@ -25529,14 +26619,14 @@ function cachedContext(project, input, options = {}) {
 }
 
 // src/memory/facts.js
-import fs19 from "node:fs";
-import path20 from "node:path";
+import fs24 from "node:fs";
+import path25 from "node:path";
 var NEW_STATUSES2 = new Set(["proposed", "established"]);
 var RETRACTABLE = new Set(["proposed", "established"]);
 function addFact(root, options = {}) {
   const command = "fact add";
   if (options.dataPath === undefined)
-    return invalid(command, "Usage: story fact add --data <json-file>");
+    return invalid2(command, "Usage: story fact add --data <json-file>");
   const opened = openProject(root, command);
   if (opened.error)
     return opened.error;
@@ -25549,16 +26639,16 @@ function addFact(root, options = {}) {
     return read.error;
   const record = { format: FORMAT, "schema-version": SCHEMA_VERSION, id: read.data.id, type: "fact", ...read.data };
   if (record.type !== "fact")
-    return invalid(command, "fact add creates records of type fact");
+    return invalid2(command, "fact add creates records of type fact");
   if (record.id === undefined)
     record.id = allocateId("fact", new Set(project.records.keys()));
   if (typeof record.id !== "string" || !ID_PATTERN.test(record.id))
-    return invalid(command, `Invalid id: ${record.id}`);
+    return invalid2(command, `Invalid id: ${record.id}`);
   if (project.records.has(record.id)) {
     return failure(command, `Record id ${record.id} is already used`, "DUPLICATE_RECORD_ID", 1, [record.id]);
   }
   if (!NEW_STATUSES2.has(record.status)) {
-    return invalid(command, "A new fact is proposed or established; use fact retract to retire one");
+    return invalid2(command, "A new fact is proposed or established; use fact retract to retire one");
   }
   const staleOrMissing = hashRefs(command, root, record, "sources");
   if (staleOrMissing)
@@ -25566,7 +26656,7 @@ function addFact(root, options = {}) {
   const schema = validateRecord(record);
   if (schema.length > 0)
     return findingsResult(command, schema, 2);
-  const taken = new Set(fs19.existsSync(path20.join(root, "facts")) ? fs19.readdirSync(path20.join(root, "facts")) : []);
+  const taken = new Set(fs24.existsSync(path25.join(root, "facts")) ? fs24.readdirSync(path25.join(root, "facts")) : []);
   const relative3 = `facts/${uniqueFilename(record.id, record.id, taken)}`;
   const entry = { id: record.id, type: "fact", path: relative3, record, body: "", valid: true };
   const withFact = { records: new Map([...project.records, [record.id, entry]]), unindexed: project.unindexed };
@@ -25612,7 +26702,7 @@ function workFacts(root) {
   const walk = (relative3) => {
     let entries;
     try {
-      entries = fs19.readdirSync(path20.join(root, relative3), { withFileTypes: true });
+      entries = fs24.readdirSync(path25.join(root, relative3), { withFileTypes: true });
     } catch {
       return;
     }
@@ -25623,7 +26713,7 @@ function workFacts(root) {
       else if (item.isFile() && item.name.endsWith(".md")) {
         let data;
         try {
-          data = parseFrontmatter(fs19.readFileSync(path20.join(root, child), "utf8"), child).data;
+          data = parseFrontmatter(fs24.readFileSync(path25.join(root, child), "utf8"), child).data;
         } catch {
           continue;
         }
@@ -25669,7 +26759,7 @@ function listText(data, diagnostics) {
 function listFacts(root, options = {}) {
   const command = "fact list";
   if (options.cursor === undefined && (options.beatId !== undefined || options.side !== undefined)) {
-    return invalid(command, "--beat and --side need --scene");
+    return invalid2(command, "--beat and --side need --scene");
   }
   const opened = openProject(root, command);
   if (opened.error)
@@ -25710,7 +26800,7 @@ function listFacts(root, options = {}) {
 function retractFact(root, id, options = {}) {
   const command = "fact retract";
   if (!id)
-    return invalid(command, "Usage: story fact retract <id>");
+    return invalid2(command, "Usage: story fact retract <id>");
   const opened = openProject(root, command);
   if (opened.error)
     return opened.error;
@@ -25725,10 +26815,10 @@ function retractFact(root, id, options = {}) {
   if (!RETRACTABLE.has(from)) {
     return failure(command, `Fact ${id} is ${from}; only proposed or established facts can be retracted`, "FACT_TRANSITION_INVALID", 1, [id]);
   }
-  const markdown = fs19.readFileSync(path20.join(root, entry.path), "utf8");
+  const markdown = fs24.readFileSync(path25.join(root, entry.path), "utf8");
   const parsed = parseFrontmatter(markdown, entry.path);
   const content = replaceFrontmatter(markdown, { ...parsed.data, status: "retracted" });
-  const relative3 = entry.path.split(path20.sep).join("/");
+  const relative3 = entry.path.split(path25.sep).join("/");
   const writes = [{ path: relative3, action: "replace", expectedHash: entry.hash, content }];
   try {
     const recorded = commit(root, writes, options.dryRun === true);
@@ -25749,15 +26839,15 @@ function retractFact(root, id, options = {}) {
 }
 
 // src/cli/handlers/fact.js
-function optionValue2(value) {
+function optionValue3(value) {
   return Array.isArray(value) ? value[value.length - 1] : value;
 }
 function cursorOption(options) {
-  const sceneId = optionValue2(options.scene);
+  const sceneId = optionValue3(options.scene);
   if (sceneId === undefined)
     return;
-  const cursor = { sceneId: String(sceneId), side: optionValue2(options.side) ?? "before" };
-  const beatId = optionValue2(options.beat);
+  const cursor = { sceneId: String(sceneId), side: optionValue3(options.side) ?? "before" };
+  const beatId = optionValue3(options.beat);
   if (beatId !== undefined)
     cursor.beatId = String(beatId);
   return cursor;
@@ -25765,7 +26855,7 @@ function cursorOption(options) {
 function addFactCommand(ctx) {
   return present(ctx, addFact(ctx.root(), {
     cwd: ctx.cwd,
-    dataPath: optionValue2(ctx.parsed.options.data),
+    dataPath: optionValue3(ctx.parsed.options.data),
     dryRun: isTruthy(ctx.parsed.options["dry-run"])
   }));
 }
@@ -25773,8 +26863,8 @@ function listFactsCommand(ctx) {
   const options = ctx.parsed.options;
   return present(ctx, listFacts(ctx.root(), {
     cursor: cursorOption(options),
-    beatId: optionValue2(options.beat),
-    side: optionValue2(options.side),
+    beatId: optionValue3(options.beat),
+    side: optionValue3(options.side),
     includeInactive: isTruthy(options["include-inactive"]),
     includeWork: isTruthy(options["include-work"])
   }));
@@ -25786,8 +26876,8 @@ function retractFactCommand(ctx) {
 }
 
 // src/cli/handlers/context.js
-var COMMAND = "context";
-function optionValue3(value) {
+var COMMAND3 = "context";
+function optionValue4(value) {
   return Array.isArray(value) ? value[value.length - 1] : value;
 }
 function optionList(value) {
@@ -25795,25 +26885,25 @@ function optionList(value) {
     return;
   return (Array.isArray(value) ? value : [value]).map(String);
 }
-function invalid2(messages) {
+function invalid3(messages) {
   const diagnostics = messages.map((message) => finding({
     code: "INVALID_INVOCATION",
     message,
     action: "Pass --task, plus --scene [--beat] [--side] for draft, revise, review and image."
   }));
-  return { envelope: envelope({ command: COMMAND, ok: false, diagnostics }), exitCode: 2, text: `${messages.join(`
+  return { envelope: envelope({ command: COMMAND3, ok: false, diagnostics }), exitCode: 2, text: `${messages.join(`
 `)}
 ` };
 }
 function requestFrom(options) {
   const problems = [];
-  const request = { task: optionValue3(options.task) };
+  const request = { task: optionValue4(options.task) };
   const target = cursorOption(options);
   if (target !== undefined)
     request.target = target;
   else if (options.beat !== undefined || options.side !== undefined)
     problems.push("--beat and --side need --scene");
-  const audience = optionValue3(options.audience);
+  const audience = optionValue4(options.audience);
   if (audience !== undefined)
     request.audience = audience;
   const constraints = optionList(options.constraint);
@@ -25822,7 +26912,7 @@ function requestFrom(options) {
   const include = optionList(options.include);
   if (include !== undefined)
     request.include = include;
-  const maxBytes = optionValue3(options["max-bytes"]);
+  const maxBytes = optionValue4(options["max-bytes"]);
   if (maxBytes !== undefined) {
     if (/^[0-9]+$/.test(String(maxBytes)) && Number(maxBytes) > 0)
       request.maxBytes = Number(maxBytes);
@@ -25919,35 +27009,35 @@ function contextResult(root, options) {
   const { request, problems } = requestFrom(options);
   problems.push(...validateRequest(request).problems);
   if (problems.length > 0)
-    return invalid2(problems);
-  const opened = openProject(root, COMMAND);
+    return invalid3(problems);
+  const opened = openProject(root, COMMAND3);
   if (opened.error)
     return opened.error;
-  const blocked = loadErrorResult(COMMAND, opened.project);
+  const blocked = loadErrorResult(COMMAND3, opened.project);
   if (blocked)
     return blocked;
   const { packet, cache } = cachedContext(opened.project, request);
   const ok = !packet.diagnostics.some((item) => item.severity === "error");
   return {
-    envelope: envelope({ command: COMMAND, ok, data: { packet, cache }, diagnostics: packet.diagnostics }),
+    envelope: envelope({ command: COMMAND3, ok, data: { packet, cache }, diagnostics: packet.diagnostics }),
     exitCode: ok ? 0 : 1,
     text: packetText(packet, cache)
   };
 }
 
 // src/cli/handlers/decision.js
-function optionValue4(value) {
+function optionValue5(value) {
   return Array.isArray(value) ? value[value.length - 1] : value;
 }
 function addDecisionCommand(ctx) {
   return present(ctx, addDecision(ctx.root(), {
     cwd: ctx.cwd,
-    dataPath: optionValue4(ctx.parsed.options.data),
+    dataPath: optionValue5(ctx.parsed.options.data),
     dryRun: isTruthy(ctx.parsed.options["dry-run"])
   }));
 }
 function listDecisionsCommand(ctx) {
-  const record = optionValue4(ctx.parsed.options.record);
+  const record = optionValue5(ctx.parsed.options.record);
   return present(ctx, listDecisions(ctx.root(), {
     includeInactive: isTruthy(ctx.parsed.options["include-inactive"]),
     record: record === undefined ? undefined : String(record)
@@ -25956,19 +27046,19 @@ function listDecisionsCommand(ctx) {
 function supersedeDecisionCommand(ctx) {
   return present(ctx, supersedeDecision(ctx.root(), ctx.parsed.positionals[2], {
     cwd: ctx.cwd,
-    dataPath: optionValue4(ctx.parsed.options.data),
+    dataPath: optionValue5(ctx.parsed.options.data),
     dryRun: isTruthy(ctx.parsed.options["dry-run"])
   }));
 }
 
 // src/cli/handlers/issue.js
-function optionValue5(value) {
+function optionValue6(value) {
   return Array.isArray(value) ? value[value.length - 1] : value;
 }
 function mutation(ctx) {
   return {
     cwd: ctx.cwd,
-    dataPath: optionValue5(ctx.parsed.options.data),
+    dataPath: optionValue6(ctx.parsed.options.data),
     dryRun: isTruthy(ctx.parsed.options["dry-run"])
   };
 }
@@ -25976,7 +27066,7 @@ function addIssueCommand(ctx) {
   return present(ctx, addIssue(ctx.root(), mutation(ctx)));
 }
 function listIssuesCommand(ctx) {
-  const record = optionValue5(ctx.parsed.options.record);
+  const record = optionValue6(ctx.parsed.options.record);
   return present(ctx, listIssues(ctx.root(), {
     includeInactive: isTruthy(ctx.parsed.options["include-inactive"]),
     record: record === undefined ? undefined : String(record)
@@ -25990,8 +27080,8 @@ function dismissIssueCommand(ctx) {
 }
 
 // src/cli/handlers/timeline.js
-import fs20 from "node:fs";
-import path21 from "node:path";
+import fs25 from "node:fs";
+import path26 from "node:path";
 function timelineCommand(ctx) {
   if (isStoryToolkitProject(ctx.root()))
     return toolkitTimeline(ctx);
@@ -25999,7 +27089,7 @@ function timelineCommand(ctx) {
 }
 function isStoryToolkitProject(root) {
   try {
-    const raw = fs20.readFileSync(path21.join(root, "story.md"), "utf8");
+    const raw = fs25.readFileSync(path26.join(root, "story.md"), "utf8");
     return parseFrontmatter(raw, "story.md").data?.format === FORMAT;
   } catch {
     return false;
@@ -26110,7 +27200,7 @@ function formatLegacyTimelineLog(result) {
 }
 
 // src/cli/handlers/knowledge.js
-var COMMAND2 = "knowledge";
+var COMMAND4 = "knowledge";
 var TOOLKIT_USAGE = "Usage: story knowledge <character-id> --scene <id> [--beat <id>] [--side before|after] [--project <path>]";
 var LEGACY_USAGE = "Usage: story knowledge <character-id> --at <chapter-id> [--path <project>]";
 function knowledgeCommand(ctx) {
@@ -26119,22 +27209,22 @@ function knowledgeCommand(ctx) {
     return present(ctx, toolkitKnowledge(ctx, root));
   return present(ctx, legacyKnowledge(ctx, root));
 }
-function invalid3(message) {
-  return failure(COMMAND2, message, "INVALID_INVOCATION", 2);
+function invalid4(message) {
+  return failure(COMMAND4, message, "INVALID_INVOCATION", 2);
 }
 function toolkitKnowledge(ctx, root) {
   const options = ctx.parsed.options;
   if (options.at !== undefined) {
-    return invalid3(`--at is for schema v2 projects; use --scene on a story-toolkit project.
+    return invalid4(`--at is for schema v2 projects; use --scene on a story-toolkit project.
 ${TOOLKIT_USAGE}`);
   }
   const cursor = cursorOption(options);
   if (cursor === undefined)
-    return invalid3(TOOLKIT_USAGE);
-  const opened = openProject(root, COMMAND2);
+    return invalid4(TOOLKIT_USAGE);
+  const opened = openProject(root, COMMAND4);
   if (opened.error)
     return opened.error;
-  const blocked = loadErrorResult(COMMAND2, opened.project);
+  const blocked = loadErrorResult(COMMAND4, opened.project);
   if (blocked)
     return blocked;
   const characterId = String(ctx.parsed.positionals[1]);
@@ -26148,7 +27238,7 @@ ${TOOLKIT_USAGE}`);
     unresolved: result.unresolved
   };
   return {
-    envelope: envelope({ command: COMMAND2, ok, data, diagnostics: result.diagnostics, writes: [] }),
+    envelope: envelope({ command: COMMAND4, ok, data, diagnostics: result.diagnostics, writes: [] }),
     exitCode: ok ? 0 : 1,
     text: formatKnowledge(characterId, data, result.diagnostics)
   };
@@ -26157,14 +27247,14 @@ function cursorLabel(cursor) {
   const beat = cursor.beatId === undefined ? "" : ` ${cursor.beatId}`;
   return `${cursor.sceneId}${beat} (${cursor.side})`;
 }
-function describe2(item) {
+function describe3(item) {
   if (item.statement) {
     const { id, subject, predicate, value } = item.statement;
     return `${id} (${subject} ${predicate} ${value})`;
   }
   return String(item.value);
 }
-function section(lines, title, items, render) {
+function section2(lines, title, items, render) {
   lines.push(`${title}:`);
   if (items.length === 0)
     lines.push("- None");
@@ -26174,13 +27264,13 @@ function section(lines, title, items, render) {
 function formatKnowledge(characterId, data, diagnostics) {
   const name = data.character ? ` (${data.character.name})` : "";
   const lines = [`Knowledge of ${characterId}${name} at ${cursorLabel(data.cursor)}:`];
-  section(lines, "Knows", data.knows, (item) => `- ${item.id}: ${describe2(item)}`);
-  section(lines, "Believes", data.believes, (item) => `- ${item.id}: ${describe2(item)}`);
+  section2(lines, "Knows", data.knows, (item) => `- ${item.id}: ${describe3(item)}`);
+  section2(lines, "Believes", data.believes, (item) => `- ${item.id}: ${describe3(item)}`);
   if (data.unresolved.length > 0) {
-    section(lines, "Unresolved", data.unresolved, (item) => `- ${item.id}: ${String(item.value)} (${item.reason})`);
+    section2(lines, "Unresolved", data.unresolved, (item) => `- ${item.id}: ${String(item.value)} (${item.reason})`);
   }
   if (diagnostics.length > 0) {
-    section(lines, "Diagnostics", diagnostics, (item) => `- ${item.severity} ${item.code}: ${item.message}`);
+    section2(lines, "Diagnostics", diagnostics, (item) => `- ${item.severity} ${item.code}: ${item.message}`);
   }
   return `${lines.join(`
 `)}
@@ -26189,13 +27279,13 @@ function formatKnowledge(characterId, data, diagnostics) {
 function legacyKnowledge(ctx, root) {
   const options = ctx.parsed.options;
   if (options.scene !== undefined || options.beat !== undefined || options.side !== undefined) {
-    return invalid3(`--scene is for story-toolkit projects; schema v2 knowledge uses --at.
+    return invalid4(`--scene is for story-toolkit projects; schema v2 knowledge uses --at.
 ${LEGACY_USAGE}`);
   }
   const characterId = String(ctx.parsed.positionals[1]);
   const atChapterId = Array.isArray(options.at) ? options.at.at(-1) : options.at;
   if (typeof atChapterId !== "string")
-    return invalid3(LEGACY_USAGE);
+    return invalid4(LEGACY_USAGE);
   let entries;
   try {
     entries = knowledgeAtChapter(root, characterId, atChapterId);
@@ -26210,7 +27300,7 @@ ${LEGACY_USAGE}`);
   }).join("");
   return {
     envelope: envelope({
-      command: COMMAND2,
+      command: COMMAND4,
       ok: true,
       data: { format: "schema-v2", character: characterId, at: atChapterId, entries },
       writes: []
@@ -26222,29 +27312,29 @@ ${LEGACY_USAGE}`);
 function legacyFailure(error) {
   const message = error instanceof Error ? error.message : String(error);
   if (message.includes("is not a story project: missing story.md")) {
-    return failure(COMMAND2, message, "PROJECT_NOT_FOUND", 2);
+    return failure(COMMAND4, message, "PROJECT_NOT_FOUND", 2);
   }
   if (error && (error.code === "EACCES" || error.code === "EPERM")) {
-    return failure(COMMAND2, message, "OPERATION_FAILED", 4);
+    return failure(COMMAND4, message, "OPERATION_FAILED", 4);
   }
-  return failure(COMMAND2, message, "COMMAND_FAILED", 1);
+  return failure(COMMAND4, message, "COMMAND_FAILED", 1);
 }
 
 // src/cli/handlers/project.js
-function optionValue6(value) {
+function optionValue7(value) {
   return Array.isArray(value) ? value[value.length - 1] : value;
 }
 function initToolkitCommand(ctx) {
   return present(ctx, initProject({
     title: ctx.parsed.positionals.slice(1).join(" "),
     cwd: ctx.cwd,
-    dir: optionValue6(ctx.parsed.options.dir),
-    genre: optionValue6(ctx.parsed.options.genre),
-    subGenre: optionValue6(ctx.parsed.options["sub-genre"]),
-    settingEra: optionValue6(ctx.parsed.options["setting-era"]),
-    pov: optionValue6(ctx.parsed.options.pov),
-    tense: optionValue6(ctx.parsed.options.tense),
-    synopsis: optionValue6(ctx.parsed.options.synopsis),
+    dir: optionValue7(ctx.parsed.options.dir),
+    genre: optionValue7(ctx.parsed.options.genre),
+    subGenre: optionValue7(ctx.parsed.options["sub-genre"]),
+    settingEra: optionValue7(ctx.parsed.options["setting-era"]),
+    pov: optionValue7(ctx.parsed.options.pov),
+    tense: optionValue7(ctx.parsed.options.tense),
+    synopsis: optionValue7(ctx.parsed.options.synopsis),
     dryRun: isTruthy(ctx.parsed.options["dry-run"])
   }));
 }
@@ -26252,8 +27342,8 @@ function importToolkitCommand(ctx) {
   return present(ctx, importMarkdown({
     source: ctx.parsed.positionals[1],
     cwd: ctx.cwd,
-    out: optionValue6(ctx.parsed.options.out),
-    title: optionValue6(ctx.parsed.options.title),
+    out: optionValue7(ctx.parsed.options.out),
+    title: optionValue7(ctx.parsed.options.title),
     dryRun: isTruthy(ctx.parsed.options["dry-run"])
   }));
 }
@@ -26383,7 +27473,7 @@ var COMMAND_LIST = [
       io.stdout.write(`Created story project: ${result.root}
 `);
       for (const linkedBook of result.linkedBooks) {
-        io.stdout.write(`Linked series backlink in ${path22.join(linkedBook, "story.md")}
+        io.stdout.write(`Linked series backlink in ${path27.join(linkedBook, "story.md")}
 `);
       }
       return 0;
@@ -27032,6 +28122,50 @@ var COMMAND_LIST = [
       "story context --task plan --include arc_trust --max-bytes 20000"
     ],
     run: contextCommand
+  },
+  {
+    name: "snapshot",
+    path: ["snapshot"],
+    usage: "snapshot <name>",
+    summary: ["Save an explicit, immutable copy of the project files", "under .story/revisions/<name>/ as a comparison baseline"],
+    project: "discover",
+    mutates: true,
+    returnsResult: true,
+    strictOptions: true,
+    enforceArgs: true,
+    args: [{ name: "name", required: true }],
+    optionSchema: [
+      { name: "project" },
+      { name: "path" },
+      { name: "format", values: ["text", "json"] },
+      { name: "dry-run" }
+    ],
+    examples: ["story snapshot draft-1"],
+    run: snapshotCommand
+  },
+  {
+    name: "changes",
+    path: ["changes"],
+    usage: "changes --since <git-ref-or-snapshot> [--scope <json-file>]",
+    summary: ["Compare the project with a Git commit or snapshot by", "stable id and check declared edit ranges"],
+    project: "discover",
+    mutates: false,
+    returnsResult: true,
+    strictOptions: true,
+    enforceArgs: true,
+    optionSchema: [
+      { name: "project" },
+      { name: "path" },
+      { name: "format", values: ["text", "json"] },
+      { name: "since", required: true },
+      { name: "scope" }
+    ],
+    examples: [
+      "story changes --since main",
+      "story changes --since snapshot:draft-1",
+      "story changes --since git:v1.0 --scope dialogue-scope.json"
+    ],
+    run: changesCommand
   }
 ];
 var COMMANDS = defineCommands(COMMAND_LIST);
@@ -27122,34 +28256,34 @@ function resolveRoot(cwd, parsed, name) {
   const command = commandFor(parsed, name);
   const projectFlag = lastOptionValue(parsed.options.project);
   const pathFlag = lastOptionValue(parsed.options.path);
-  if (projectFlag !== undefined && pathFlag !== undefined && path23.resolve(cwd, String(projectFlag)) !== path23.resolve(cwd, String(pathFlag))) {
+  if (projectFlag !== undefined && pathFlag !== undefined && path28.resolve(cwd, String(projectFlag)) !== path28.resolve(cwd, String(pathFlag))) {
     throw new Error(`Conflicting project paths: --project ${projectFlag} and --path ${pathFlag}. Use one of --project or --path.`);
   }
   const flagPath = projectFlag ?? pathFlag;
   const flagLabel = projectFlag !== undefined ? "--project" : "--path";
   if (command?.project === "discover") {
     if (flagPath !== undefined)
-      return path23.resolve(cwd, String(flagPath));
-    return discoverProject(cwd) ?? path23.resolve(cwd, ".");
+      return path28.resolve(cwd, String(flagPath));
+    return discoverProject(cwd) ?? path28.resolve(cwd, ".");
   }
   if (command?.project !== "positional") {
     if (flagPath !== undefined)
-      return path23.resolve(cwd, String(flagPath));
-    return path23.resolve(cwd, ".");
+      return path28.resolve(cwd, String(flagPath));
+    return path28.resolve(cwd, ".");
   }
   const positionalPath = command.path.length === 1 ? parsed.positionals[1] : undefined;
   if (positionalPath !== undefined && flagPath !== undefined) {
-    const resolvedPositional = path23.resolve(cwd, positionalPath);
-    const resolvedFlag = path23.resolve(cwd, String(flagPath));
+    const resolvedPositional = path28.resolve(cwd, positionalPath);
+    const resolvedFlag = path28.resolve(cwd, String(flagPath));
     if (resolvedPositional !== resolvedFlag) {
       throw new Error(`Conflicting project paths: ${positionalPath} and ${flagLabel} ${flagPath}. Use either a positional path or ${flagLabel}, not both.`);
     }
     return resolvedFlag;
   }
   if (flagPath !== undefined || positionalPath !== undefined) {
-    return path23.resolve(cwd, String(flagPath ?? positionalPath));
+    return path28.resolve(cwd, String(flagPath ?? positionalPath));
   }
-  return path23.resolve(cwd, ".");
+  return path28.resolve(cwd, ".");
 }
 function captureIo(cwd) {
   const out = [];
