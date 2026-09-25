@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import { runCli } from "../src/cli.js";
+import { formatLegacyTimelineLog, timelineFailure } from "../src/cli/handlers/timeline.js";
 import { formatTimeline } from "../src/timeline.js";
 import { createEntity, createStoryProject, storyTimeline } from "../src/story.js";
 import { makeTempDir, memoryIo, writeMarkdown } from "./helpers.js";
@@ -11,6 +12,12 @@ function invoke(cwd, argv) {
   const io = memoryIo(cwd);
   const code = runCli(argv, io);
   return { code, out: io.output(), err: io.error() };
+}
+
+// JSON selection belongs to the command runner. Timeline tests go through it
+// and never teach the handler a private output flag.
+function withJson(argv) {
+  return [...argv, "--format", "json"];
 }
 
 function writeChapter(root, number, fields, body = "Word ".repeat(number * 10)) {
@@ -146,9 +153,9 @@ describe("story timeline", () => {
     expect(invoke(cwd, ["timeline", root]).out).toContain("Timeline: 0 dated, 1 undated");
   });
 
-  test("schema v2 timeline --json is one envelope", () => {
+  test("schema v2 timeline JSON is one envelope", () => {
     const { root, cwd } = timelineProject();
-    const result = invoke(cwd, ["timeline", "--json", "--path", root]);
+    const result = invoke(cwd, withJson(["timeline", "--path", root]));
 
     expect(result.code).toBe(0);
     expect(result.out.includes("\n")).toBe(false);
@@ -157,7 +164,8 @@ describe("story timeline", () => {
     expect(parsed.command).toBe("timeline");
     expect(parsed.data.format).toBe("schema-v2");
     expect(parsed.data.chronology.map((entry) => entry.id)).toContain("chapter-02-scene-01");
-    expect(result.err).toBe("story: timeline\n");
+    // present() keeps the legacy status line on stderr in both modes.
+    expect(result.err).toBe("Timeline built: 0 errors, 0 warnings, 0 dismissed\nstory: timeline\n");
     expect(result.err.includes(result.out)).toBe(false);
   });
 
@@ -171,9 +179,9 @@ describe("story timeline", () => {
 });
 
 describe("story-toolkit timeline", () => {
-  test("timeline --json stdout purity", async () => {
+  test("timeline JSON stdout purity", async () => {
     const p = await makeChronologyFixture();
-    const result = invoke(p.root, ["timeline", "--json"]);
+    const result = invoke(p.root, withJson(["timeline"]));
 
     expect(result.code).toBe(0);
     expect(result.out.includes("\n")).toBe(false);
@@ -209,7 +217,9 @@ describe("story-toolkit timeline", () => {
     await p.addScene({ id: "scn_a", title: "A", chronology: { after: ["scn_c"] } });
     await p.addScene({ id: "scn_b", title: "B", chronology: { after: ["scn_a"] } });
     await p.addScene({ id: "scn_c", title: "C", chronology: { after: ["scn_b"] } });
-    const result = invoke(p.root, ["timeline", "--json"]);
+    const text = invoke(p.root, ["timeline"]);
+    const result = invoke(p.root, withJson(["timeline"]));
+    expect(text.code).toBe(result.code);
     expect(result.code).toBe(1);
     expect(result.out.includes("\n")).toBe(false);
     const parsed = JSON.parse(result.out);
@@ -217,5 +227,68 @@ describe("story-toolkit timeline", () => {
     expect(parsed.diagnostics.map((item) => item.code)).toContain("CYCLE");
     expect(Array.isArray(parsed.data.storyOrder)).toBe(false);
     expect(parsed.data.storyOrder.cyclic.flat().sort()).toEqual(["scn_a", "scn_b", "scn_c"]);
+    const report = `${text.out}${text.err}`;
+    expect(report).toContain("Cycles (not a sequence)");
+    expect(report).toContain("scn_a, scn_b, scn_c");
+    expect(report).toContain("error CYCLE:");
+  });
+
+  test("an empty project and a single scene keep partial order explicit", async () => {
+    const empty = await makeProject();
+    const blank = invoke(empty.root, ["timeline"]);
+    expect(blank.code).toBe(0);
+    expect(blank.out).toContain("Reading order:\n- None");
+    expect(blank.out).toContain("- No ordering constraints");
+    expect(blank.out).not.toContain("Cycles");
+    expect(blank.out).not.toContain("Not placed");
+
+    const p = await makeProject();
+    await p.addScene({ id: "scn_only", title: "Only" });
+    const marker = "<!-- story-scene: scn_only -->\n";
+    p.write("chapters/one.md", p.read("chapters/one.md").replace(marker, `${marker}<!-- story-beat: beat_enter -->\n<!-- story-beat: beat_leave -->\n`));
+    const placed = invoke(p.root, ["timeline"]);
+    expect(placed.code).toBe(0);
+    expect(placed.out).toContain("- 1. scn_only (chp_one) [beat_enter, beat_leave]");
+    expect(placed.out).toContain("- No ordering constraints");
+    expect(placed.out).toContain("Not placed in story order:\n- scn_only");
+  });
+
+  test("a missing project fails the same way in text and JSON", () => {
+    const cwd = makeTempDir();
+    const text = invoke(cwd, ["timeline"]);
+    const json = invoke(cwd, withJson(["timeline"]));
+    expect(text.code).toBe(json.code);
+    expect(json.code).toBe(2);
+    expect(json.out.includes("\n")).toBe(false);
+    const parsed = JSON.parse(json.out);
+    expect(parsed.ok).toBe(false);
+    expect(parsed.diagnostics[0].code).toBe("PROJECT_NOT_FOUND");
+    expect(`${text.out}${text.err}`).toContain("missing story.md");
+    expect(json.err.includes(json.out)).toBe(false);
+  });
+
+  test("legacy status lines and operational failures keep one exit policy", () => {
+    const log = formatLegacyTimelineLog({
+      ok: false,
+      errors: ["chapters/missing.md"],
+      warnings: ["undated scene"],
+      dismissed: [{ finding: "timeline gap", reason: "intentional" }]
+    });
+    expect(log).toContain("Timeline failed: 1 errors, 1 warnings, 1 dismissed");
+    expect(log).toContain("error: chapters/missing.md");
+    expect(log).toContain("warning: undated scene");
+    expect(log).toContain("dismissed: timeline gap (exemption: intentional)");
+    const built = formatLegacyTimelineLog({ ok: true, errors: [] });
+    expect(built).toContain("Timeline built: 0 errors, 0 warnings, 0 dismissed");
+
+    const missing = timelineFailure(new Error("/tmp/nowhere is not a story project: missing story.md"));
+    const operational = timelineFailure(new Error("EACCES while reading chapters/one.md"));
+    const thrown = timelineFailure("disk full");
+    expect(missing.exitCode).toBe(2);
+    expect(missing.envelope.diagnostics[0].code).toBe("PROJECT_NOT_FOUND");
+    expect(operational.exitCode).toBe(4);
+    expect(operational.envelope.diagnostics[0].code).toBe("OPERATION_FAILED");
+    expect(thrown.exitCode).toBe(4);
+    expect(thrown.envelope.ok).toBe(false);
   });
 });

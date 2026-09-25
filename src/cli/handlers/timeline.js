@@ -6,7 +6,7 @@ import { storyTimeline } from "../../story.js";
 import { parseFrontmatter } from "../../storage/document.js";
 import { loadProjectSync } from "../../project/load.js";
 import { buildChronology } from "../../state/chronology.js";
-import { envelope, finding, present } from "../result.js";
+import { envelope, failure, finding, present } from "../result.js";
 
 export function timelineCommand(ctx) {
   if (isStoryToolkitProject(ctx.root())) return toolkitTimeline(ctx);
@@ -68,43 +68,55 @@ function formatPartialTimeline(data, diagnostics) {
 }
 
 function legacyTimeline(ctx) {
-  const timeline = storyTimeline(ctx.root());
-  const text = formatTimeline(timeline, timeline.totalChapters);
-  if (ctx.json) {
-    const diagnostics = timeline.errors.map((message) => finding({
-      code: "COMMAND_FAILED",
-      message,
-      action: "Fix the reported error and run the command again."
-    }));
-    return present(ctx, {
-      envelope: envelope({
-        command: "timeline",
-        ok: timeline.ok,
-        data: {
-          format: "schema-v2",
-          chronology: timeline.chronology,
-          undated: timeline.undated,
-          pov: timeline.pov,
-          presence: timeline.presence
-        },
-        diagnostics,
-        writes: []
-      }),
-      exitCode: timeline.ok ? 0 : 1,
-      text
-    });
+  let timeline;
+  try {
+    timeline = storyTimeline(ctx.root());
+  } catch (error) {
+    return present(ctx, timelineFailure(error));
   }
-  ctx.io.stdout.write(text);
-  return reportLegacy(ctx.io, timeline);
+  const text = formatTimeline(timeline, timeline.totalChapters);
+  const diagnostics = timeline.errors.map((message) => finding({
+    code: "COMMAND_FAILED",
+    message,
+    action: "Fix the reported error and run the command again."
+  }));
+  return present(ctx, {
+    envelope: envelope({
+      command: "timeline",
+      ok: timeline.ok,
+      data: {
+        format: "schema-v2",
+        chronology: timeline.chronology,
+        undated: timeline.undated,
+        pov: timeline.pov,
+        presence: timeline.presence
+      },
+      diagnostics,
+      writes: []
+    }),
+    exitCode: timeline.ok ? 0 : 1,
+    text,
+    log: formatLegacyTimelineLog(timeline)
+  });
 }
 
-function reportLegacy(io, result) {
+// A missing project is an invocation failure. Anything else storyTimeline
+// throws is operational: the command did not finish a report. Exit codes come
+// from failure() so text and JSON stay on the same result.
+export function timelineFailure(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes("is not a story project: missing story.md")) {
+    return failure("timeline", message, "PROJECT_NOT_FOUND", 2);
+  }
+  return failure("timeline", message, "OPERATION_FAILED", 4);
+}
+
+export function formatLegacyTimelineLog(result) {
+  const warnings = result.warnings ?? [];
   const dismissed = result.dismissed ?? [];
-  const successMessage = "Timeline built";
-  const failureMessage = "Timeline failed";
-  io.stderr.write(`${result.ok ? successMessage : failureMessage}: ${result.errors.length} errors, ${result.warnings.length} warnings, ${dismissed.length} dismissed\n`);
-  for (const error of result.errors) io.stderr.write(`error: ${error}\n`);
-  for (const warning of result.warnings) io.stderr.write(`warning: ${warning}\n`);
-  for (const entry of dismissed) io.stderr.write(`dismissed: ${entry.finding} (exemption: ${entry.reason})\n`);
-  return result.ok ? 0 : 1;
+  const lines = [`${result.ok ? "Timeline built" : "Timeline failed"}: ${result.errors.length} errors, ${warnings.length} warnings, ${dismissed.length} dismissed`];
+  for (const error of result.errors) lines.push(`error: ${error}`);
+  for (const warning of warnings) lines.push(`warning: ${warning}`);
+  for (const entry of dismissed) lines.push(`dismissed: ${entry.finding} (exemption: ${entry.reason})`);
+  return `${lines.join("\n")}\n`;
 }
