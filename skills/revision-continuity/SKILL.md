@@ -72,16 +72,16 @@ If `story` is not installed, use `bun run story --` from the Story Skills reposi
 Take a snapshot before a revision pass that touches more than one chapter, and name it after the draft it preserves (`draft-1`, `pre-beta-edit`).
 
 - **Git projects:** check `git status`. Ask the user before committing anything; with approval, commit the current state and tag it: `git add -A && git commit -m "Draft 1 before developmental pass" && git tag draft-1`. Never push, rewrite history, or delete tags without explicit approval.
-- **Projects without git:** offer to run `git init` first. If the user declines, copy the whole project folder beside it (`../the-tide-room-draft-1`), never into the project, where `story` commands would scan the copy.
+- **Projects without git:** offer to run `git init` first. If the user declines, run `story snapshot draft-1`. It stores an immutable, hashed copy of the project files under `.story/revisions/draft-1/`, which `story` commands never scan as manuscript. Do not copy the project folder by hand; `story compare` no longer reads folder copies.
 
 After the pass, compare with the snapshot and report the result:
 
 ```shell
 story compare . --ref draft-1
-story compare . --against ../the-tide-room-draft-1
+story compare . --ref snapshot:draft-1
 ```
 
-`story compare` lists each chapter's word change, added and removed chapters, and the share of paragraphs left unchanged, so the user can see how deep the pass went. Chapters are matched by id, so a renumbered chapter shows as removed and added. It only reads git; it never commits or tags.
+`story compare` lists each chapter's word change, added and removed chapters, and the share of paragraphs left unchanged, so the user can see how deep the pass went. Chapters are matched by id, so a renumbered chapter shows as removed and added. It only reads git and snapshots; it never commits, tags, or takes a snapshot.
 
 ## Continuity Audit Checklist
 

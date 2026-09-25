@@ -201,11 +201,11 @@ const COMMAND_LIST = [
     summary: [
       "Compare chapters with an earlier draft: word changes,",
       "added and removed chapters, and unchanged paragraphs;",
-      "requires --ref or --against"
+      "requires --ref (a Git ref or a snapshot)"
     ],
     project: "positional",
-    run({ parsed, io, cwd, root }) {
-      const comparison = compareProject(root(), { ref: parsed.options.ref, against: parsed.options.against, cwd });
+    run({ parsed, io, root }) {
+      const comparison = compareProject(root(), { ref: parsed.options.ref });
       io.stdout.write(formatComparison(comparison, comparison.label));
       return reportResult(io, comparison, "Comparison complete", "Comparison failed");
     }

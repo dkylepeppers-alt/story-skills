@@ -130,18 +130,18 @@ function workingFiles(root, prefix) {
   return new Map([...files].sort(([left], [right]) => compareText(left, right)));
 }
 
-function gitBaseline(root, ref, commit = resolveGitCommit(root, ref)) {
+function gitBaseline(root, ref, options, commit = resolveGitCommit(root, ref)) {
   const prefix = repositoryPrefix(root);
   return {
     baseline: { kind: "git", ref, commit },
     files: filesAtCommit(root, prefix, commit),
-    current: workingFiles(root, prefix)
+    current: options.current === false ? null : workingFiles(root, prefix)
   };
 }
 
-function snapshotBaseline(root, name) {
+function snapshotBaseline(root, name, options) {
   const { baseline, files } = readSnapshot(root, name);
-  return { baseline, files, current: projectFiles(root) };
+  return { baseline, files, current: options.current === false ? null : projectFiles(root) };
 }
 
 function invalid(since) {
@@ -158,30 +158,33 @@ function invalid(since) {
  * bare name must match exactly one of a snapshot and a Git commit. Returns
  * the stored resolution (a Git ref with its commit, or a snapshot with its
  * manifest hash), the baseline files and the current files, each a Map of
- * project-relative POSIX path to bytes.
+ * project-relative POSIX path to bytes. With `options.current === false` the
+ * current files are not read (`current` is null).
  */
-export function resolveBaseline(root, since) {
+export function resolveBaseline(root, since, options = {}) {
   if (typeof since !== "string") throw invalid(since);
   if (since.startsWith("snapshot:")) {
     const name = since.slice("snapshot:".length);
     if (!isSnapshotName(name)) throw invalid(since);
-    return snapshotBaseline(root, name);
+    return snapshotBaseline(root, name, options);
   }
   if (since.startsWith("git:")) {
     const ref = since.slice("git:".length);
     if (!isGitRef(ref)) throw invalid(since);
-    return gitBaseline(root, ref);
+    return gitBaseline(root, ref, options);
   }
   const snapshot = snapshotExists(root, since);
   if (!isGitRef(since)) {
-    if (snapshot) return snapshotBaseline(root, since);
+    if (snapshot) return snapshotBaseline(root, since, options);
     throw invalid(since);
   }
   let commit = null;
+  let repository = true;
   try {
     commit = resolveGitCommit(root, since);
   } catch (error) {
-    if (error.code !== "BASELINE_NOT_FOUND" && error.code !== "NOT_A_GIT_REPOSITORY") throw error;
+    if (error.code === "NOT_A_GIT_REPOSITORY") repository = false;
+    else if (error.code !== "BASELINE_NOT_FOUND") throw error;
   }
   if (snapshot && commit) {
     throw new BaselineError(
@@ -190,7 +193,11 @@ export function resolveBaseline(root, since) {
       2
     );
   }
-  if (snapshot) return snapshotBaseline(root, since);
-  if (commit) return gitBaseline(root, since, commit);
-  throw new BaselineError("BASELINE_NOT_FOUND", `No snapshot or Git commit named ${since}`, 2);
+  if (snapshot) return snapshotBaseline(root, since, options);
+  if (commit) return gitBaseline(root, since, options, commit);
+  throw new BaselineError(
+    "BASELINE_NOT_FOUND",
+    repository ? `No snapshot or Git commit named ${since}` : `No snapshot named ${since}, and ${root} is not inside a Git repository`,
+    2
+  );
 }

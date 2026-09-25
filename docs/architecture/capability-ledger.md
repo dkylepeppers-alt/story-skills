@@ -33,7 +33,7 @@ Baseline source of truth: `src/commands.js` (23 commands, help order).
 | `links` | Cross-reference and backlink checks | Retained | 10 | `test/diagnostics.test.js` |
 | `continuity` | Deaths, promises/payoffs, questions, casts, durable state; exemptions | Retained for schema v2 (story-toolkit projects replace substring exemptions with exact issue dismissals, Task 6) | 10 | `test/continuity.test.js`, `test/custody-time.test.js`, `test/clue.test.js`, `test/exemptions.test.js` |
 | `knowledge` | What a character knew at a chapter (`--at`) | Adapted (story-toolkit projects use `--scene`/`--beat`/`--side` cursors and return knows, believes, and unresolved items; schema v2 keeps `--at`; usage errors exit 2 under the shared exit codes) | 5 | `test/knowledge.test.js`, `test/knowledge-errors.test.js`, `test/state.test.js` |
-| `compare` | Compare with an earlier draft: word changes, added/removed chapters, unchanged paragraphs | Adapted (stable-ID matching, scopes, snapshots; `--against` folder baseline intentionally removed, see §7) | 8 | `test/compare.test.js`, `test/changes.test.js`, `test/scope.test.js` |
+| `compare` | Compare with an earlier draft: word changes, added/removed chapters, unchanged paragraphs | Adapted. Task 8: `--ref` reads a Git commit or an explicit snapshot (`snapshot:<name>`) through the shared baseline reader, and the label names the resolved commit or snapshot hash; stable-ID matching and scopes are `story changes`; `--against` folder baseline intentionally removed, see §7 | 8 | `test/compare.test.js`, `test/changes.test.js`, `test/scope.test.js` |
 | `progress` | Words vs targets/deadline; `--log` records the session | Retained | 10 | `test/progress.test.js` |
 | `timeline` | Story-time order, POV balance, character presence | Adapted (partial-order chronology; `unordered` is explicit) | 4 | `test/timeline.test.js`, `test/custody-time.test.js`, `test/chronology.test.js` |
 | `prose` | Prose lint: filter words, adverbs, echoes, rhythm, similar names, style sheet | Retained (advisory and configurable, never a quality score) | 10 | `test/prose.test.js` |
@@ -219,7 +219,11 @@ only. It exits 1 on error findings (out-of-scope edits, removed evidence),
 2 for an unreadable or invalid scope or an unknown, ambiguous or malformed
 baseline, 3 when a scope's baseline hash or a snapshot copy no longer
 matches, and 4 when Git itself fails. Stale evidence is a warning and
-exits 0.
+exits 0. Schema v2 `compare --ref` now reads its baseline through the same
+resolver: a Git commit or a snapshot, never a copied folder (`--against` is
+gone). Its label names the resolved commit or snapshot hash, and baseline
+failures use the same exit codes (2 unknown, ambiguous or malformed, 3
+corrupt snapshot, 4 Git failure) instead of the former blanket 1.
 
 ## 2. CLI options
 
@@ -236,7 +240,7 @@ them to `--kind`.
 | Project selection | `--path` | Retained. `--project` is a new alias. Only `project: discover` commands walk parents for `story.md`; legacy commands stay on the flag, positional path, or cwd | 3 | `test/command-contract.test.js`, `test/registry.test.js` |
 | Creation | `--title --dir --genre --sub-genre --setting-era --theme --themes --pov --tense --synopsis --series --book-number --follows --precedes --force` | Adapted | 3 | `test/project.test.js`, `test/init-add-safety.test.js` |
 | Maintenance | `--write --log --date` | Retained | 10 | `test/progress.test.js`, `test/story.test.js` |
-| Comparison | `--ref --against` | Adapted (git refs retained; `--against` removed, see §7) | 8 | `test/compare.test.js`, `test/changes.test.js` |
+| Comparison | `--ref --against` | Adapted (`--ref` takes a git ref or `snapshot:<name>`; `--against` removed and now an unknown option, see §7) | 8 | `test/compare.test.js`, `test/changes.test.js` |
 | Output | `--out --format --shunn --pages --actionable` | Adapted. `--format text\|json` selects the result envelope; `markdown\|epub\|docx\|shunn` stay build kinds until Task 12 `--kind` | 3, 10, 12 | `test/publishing.test.js`, `test/command-contract.test.js` |
 | Knowledge | `--at` | Adapted (story-toolkit projects use the `--scene --beat --side` cursor; `--at` stays for schema v2 projects and is an invalid invocation on story-toolkit projects) | 5 | `test/knowledge.test.js`, `test/knowledge-errors.test.js` |
 | Entity fields | `--number --chapter --scene --type --role --status --mode --date --time --travel-hours --dilemma --sequel --location(s) --character(s) --mention(s) --member(s) --owner --arc(s) --introduced --resolved --planted --payoff --significance-delayed --category --alias(es) --region --population --controlled-by --prevalence --acts --placement --order --source(s) --used-in` | Adapted (schema-validated `--data <json-file>` mutations become the primary contract; per-design §9) | 3, 5, 6, 13 | `test/project.test.js`, `test/state.test.js`, `test/memory.test.js`, `test/assets.test.js` |
@@ -359,7 +363,7 @@ is superseded or intentionally removed.
 | Copied fallback binary `skills/story-maintenance/scripts/story.js` (+ `build:fallback`, `check:fallback`, `check:node-help`) | Shipping a second executable inside a skill duplicates the CLI and drifts from the package; the toolkit ships one CLI | Packaged CLI (`dist/story.js` + `bin/story.js` entrypoint) installed from the fork release; Task 17 tests: `test/skill-build.test.js`, `test/package-smoke.test.js` |
 | Marketplace plugin distribution (`.claude-plugin/`, `.codex-plugin/`, `.agents/` as install channels; `plugins/story-skills` symlink) | One owned distribution replaces multi-marketplace installs | `story setup` / release tarball installation (Tasks 17–19); identity fields remain aligned in the interim (`test/identity.test.js`) |
 | Hidden undocumented option aliases (`--characters`, `--locations`, `--mentions`, `--members`, `--aliases`, `--arcs`, `--act`, `--sources`) | Undocumented convenience aliases; the new contract prefers documented repeatable forms and schema-validated `--data` | Documented repeatable options and `--data <json-file>` mutations (Task 3 onward); `test/command-contract.test.js` |
-| `compare --against <folder>` baseline | Copied-project-folder baselines are not immutable; snapshots are explicit and hashed | `story snapshot` + `.story/revisions/` baselines (Task 8); `test/changes.test.js` |
+| `compare --against <folder>` baseline | Copied-project-folder baselines are not immutable; snapshots are explicit and hashed | `story snapshot` + `.story/revisions/` baselines, read by `compare --ref` and `changes --since` (Task 8); `test/compare.test.js`, `test/changes.test.js` |
 | `build --format shunn` + separate `--shunn` flag | Overloaded option; kind is one concept | `build --kind shunn-md\|shunn-docx` (Task 12); `test/shunn.test.js`, `test/shunn-docx.test.js` |
 | `story-maintenance` as a standalone skill | Its deterministic checks are CLI capabilities, not a creative skill | `story-workflow` routes to the CLI; all checks retained (Task 10); `test/diagnostics.test.js` |
 | Sixteen baseline skill IDs as shipped entry points | Consolidated into ten skills; duplicate triggers must not ship | Ten-skill map in §3 (Task 16); `test/skill-contract.test.js` |

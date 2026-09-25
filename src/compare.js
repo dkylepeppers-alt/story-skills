@@ -1,7 +1,10 @@
-// Compares two versions of a manuscript chapter by chapter. Chapters match by
-// id (chapter-NN), so a renumbered chapter shows as changed, removed, or
-// added rather than moved. "Unchanged" is the share of the current chapter's
-// paragraphs that appear verbatim in the earlier version.
+// Compares two versions of a schema v2 manuscript chapter by chapter. The
+// earlier version comes from a Git commit or an explicit snapshot (see
+// compareProject and src/changes/baseline.js). Chapters match by id
+// (chapter-NN), so a renumbered chapter shows as changed, removed, or added
+// rather than moved. "Unchanged" is the share of the current chapter's
+// paragraphs that appear verbatim in the earlier version. Story-toolkit
+// projects compare by stable record and scene id with `story changes`.
 
 export function compareChapters(previous, current) {
   const before = new Map(previous.map((chapter) => [chapter.id, chapter]));
