@@ -22961,8 +22961,11 @@ function normalizeCursor(value) {
     return null;
   const beatId = value.beatId ?? value.beat;
   const cursor = { sceneId, side };
-  if (typeof beatId === "string" && beatId !== "")
-    cursor.beatId = beatId;
+  if (beatId === undefined || beatId === null)
+    return cursor;
+  if (typeof beatId !== "string" || beatId === "")
+    return null;
+  cursor.beatId = beatId;
   return cursor;
 }
 

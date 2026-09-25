@@ -29,7 +29,12 @@ export function normalizeCursor(value) {
   if (typeof sceneId !== "string" || sceneId === "" || (side !== "before" && side !== "after")) return null;
   const beatId = value.beatId ?? value.beat;
   const cursor = { sceneId, side };
-  if (typeof beatId === "string" && beatId !== "") cursor.beatId = beatId;
+  // An absent beat is a scene entry or exit. A present beat that is not a
+  // non-empty string is malformed; dropping it would answer for a different
+  // boundary.
+  if (beatId === undefined || beatId === null) return cursor;
+  if (typeof beatId !== "string" || beatId === "") return null;
+  cursor.beatId = beatId;
   return cursor;
 }
 

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import { buildChronology } from "../src/state/chronology.js";
-import { appliesAt, beatCursor, sceneEntry, sceneExit } from "../src/state/cursor.js";
+import { appliesAt, beatCursor, normalizeCursor, sceneEntry, sceneExit } from "../src/state/cursor.js";
 import { makeChronologyFixture, makeProject, setRecordField } from "./support/project.js";
 
 function codes(order) {
@@ -459,6 +459,18 @@ describe("partial chronology", () => {
     expect(order.compare(null, leftEntry)).toBe("unordered");
     expect(order.compare({ scene: "scn_left", side: "beside" }, leftEntry)).toBe("unordered");
     expect(order.diagnostics.filter((item) => item.code === "INVALID_CURSOR")).toHaveLength(1);
-    expect(order.compare({ sceneId: "scn_left", beatId: "", side: "before" }, leftExit)).toBe("before");
+    expect(order.compare({ sceneId: "scn_left", beatId: null, side: "before" }, leftExit)).toBe("before");
+  });
+
+  test("a present beat that is not a non-empty string is not a scene cursor", async () => {
+    const p = await withBeats("scn_a", ["beat_one"]);
+    const order = buildChronology(await p.load());
+    expect(normalizeCursor({ scene: "scn_a", beat: 42, side: "after" })).toBeNull();
+    expect(normalizeCursor({ scene: "scn_a", beat: "", side: "after" })).toBeNull();
+    expect(normalizeCursor({ sceneId: "scn_a", beatId: { id: "beat_one" }, side: "after" })).toBeNull();
+    expect(order.compare({ scene: "scn_a", beat: 42, side: "after" }, p.exit("scn_a"))).toBe("unordered");
+    expect(codes(order)).toContain("INVALID_CURSOR");
+    expect(appliesAt(order, { "valid-from": { scene: "scn_a", beat: 42, side: "after" } }, p.exit("scn_a"))).toBe("unresolved");
+    expect(appliesAt(order, { "valid-until": { scene: "scn_a", beat: "", side: "after" } }, p.entry("scn_a"))).toBe("unresolved");
   });
 });
