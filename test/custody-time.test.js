@@ -1,3 +1,6 @@
+// Schema v2 custody and clock checks stay in this file. Story-toolkit partial
+// chronology — unordered pairs, beat boundaries, and precision — is covered by
+// test/chronology.test.js and does not replace these continuity regressions.
 import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";

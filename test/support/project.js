@@ -148,7 +148,10 @@ export async function makeProject(options = {}) {
         expectedHash: p.hash(rel),
         content: `${p.read(rel)}<!-- touched by the test transaction -->\n`
       }));
-    }
+    },
+    entry: (sceneId) => ({ sceneId, side: "before" }),
+    exit: (sceneId) => ({ sceneId, side: "after" }),
+    cursor: (sceneId, beatId, side) => ({ sceneId, beatId, side })
   };
 
   return p;
@@ -171,8 +174,21 @@ export async function setRecordField(root, recordId, field, value) {
 export async function makeChronologyFixture() {
   const p = await makeProject();
   await p.addEntity({ id: "obj_brass_key", type: "object", name: "Brass Key" });
-  await p.addScene({ id: "scn_opening", title: "Opening" });
-  await p.addScene({ id: "scn_aftermath", title: "Aftermath", chronology: { after: ["scn_opening"] } });
+  // Reading order is marker order: opening, then the flashback, then an
+  // undated scene. Story time puts the flashback first via an explicit after
+  // edge and leaves the undated scene unordered.
+  await p.addScene({
+    id: "scn_opening",
+    title: "Opening",
+    chronology: { after: ["scn_flashback"] }
+  });
+  await p.addScene({ id: "scn_flashback", title: "Flashback" });
+  await p.addScene({ id: "scn_undated", title: "Undated" });
+  await p.addScene({
+    id: "scn_aftermath",
+    title: "Aftermath",
+    chronology: { after: ["scn_opening"] }
+  });
   await p.addFact({
     id: "fact_key_placed",
     subject: "obj_brass_key",

@@ -34,9 +34,11 @@ function slash(value) {
   return String(value).split(path.sep).join("/");
 }
 
-function pushId(refs, field, id, required) {
+function pushId(refs, field, id, required, scene) {
   if (typeof id !== "string" || id.length === 0) return;
-  refs.push({ field, id, required });
+  const ref = { field, id, required };
+  if (typeof scene === "string" && scene.length > 0) ref.scene = scene;
+  refs.push(ref);
 }
 
 function addTextRef(refs, field, value, targetId) {
@@ -46,10 +48,13 @@ function addTextRef(refs, field, value, targetId) {
   }
 }
 
+// Beat ids are unique within a scene, not across the project, so a cursor
+// beat resolves only against the beat markers inside the cursor's scene span.
+// That is the same boundary chronology uses to place the cursor.
 function addCursor(refs, field, cursor) {
   if (!cursor || typeof cursor !== "object" || Array.isArray(cursor)) return;
   pushId(refs, field, cursor.scene, true);
-  pushId(refs, `${field}.beat`, cursor.beat, true);
+  pushId(refs, `${field}.beat`, cursor.beat, true, cursor.scene);
 }
 
 function addSource(refs, field, source) {
@@ -99,14 +104,17 @@ export function projectEntries(project) {
 function inspectEntry(entry, targetId) {
   const refs = referencesInRecord(entry?.record, targetId);
   const beats = [];
+  const sceneBeats = [];
   if (entry?.record?.type === "chapter" && typeof entry.body === "string") {
     const markers = findMarkers(entry.body);
     for (const scene of markers.scenes) {
       refs.push({ field: "story-scene", id: scene.id, required: true });
+      const inside = markers.beats.filter((beat) => beat.start >= scene.start && beat.start < scene.end);
+      sceneBeats.push([scene.id, inside.map((beat) => beat.id)]);
     }
     for (const beat of markers.beats) beats.push(beat.id);
   }
-  return { refs, beats };
+  return { refs, beats, sceneBeats };
 }
 
 function knownIds(project, beats) {
@@ -117,30 +125,42 @@ function knownIds(project, beats) {
   return known;
 }
 
+function resolves(ref, known, beatsByScene) {
+  if (ref.scene === undefined) return known.has(ref.id);
+  return beatsByScene.get(ref.scene)?.has(ref.id) === true;
+}
+
 /**
  * Dangling schema and manuscript references. Beat markers count as existing
  * anchors; scene markers do not, so deleting a scene file still reports the
- * `story-scene` comment that names it.
+ * `story-scene` comment that names it. A cursor beat must be declared inside
+ * its cursor's scene span.
  */
 export function danglingReferenceDiagnostics(project) {
   const diagnostics = [];
   const beats = [];
+  const beatsByScene = new Map();
   const refs = [];
   for (const entry of projectEntries(project)) {
     const found = inspectEntry(entry);
     beats.push(...found.beats);
+    for (const [sceneId, ids] of found.sceneBeats) {
+      if (!beatsByScene.has(sceneId)) beatsByScene.set(sceneId, new Set());
+      for (const id of ids) beatsByScene.get(sceneId).add(id);
+    }
     for (const ref of found.refs) {
       refs.push({ ...ref, ownerId: entry.id, ownerPath: slash(entry.path) });
     }
   }
   const known = knownIds(project, beats);
   for (const ref of refs) {
-    if (known.has(ref.id)) continue;
+    if (resolves(ref, known, beatsByScene)) continue;
     const recordIds = typeof ref.ownerId === "string" ? [ref.id, ref.ownerId] : [ref.id];
+    const where = ref.scene === undefined ? "" : ` in scene ${ref.scene}`;
     diagnostics.push({
       code: "DANGLING_REFERENCE",
       severity: "error",
-      message: `${ref.ownerPath}: ${ref.field} references missing id ${ref.id}`,
+      message: `${ref.ownerPath}: ${ref.field} references missing id ${ref.id}${where}`,
       recordIds,
       sources: [],
       evidence: "structural",

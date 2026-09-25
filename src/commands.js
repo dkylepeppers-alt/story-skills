@@ -5,7 +5,6 @@ import { isTruthy } from "./options.js";
 import { formatProgress } from "./progress.js";
 import { formatProseReport } from "./prose.js";
 import { formatSeriesReport } from "./series.js";
-import { formatTimeline } from "./timeline.js";
 import {
   addEntityCommand,
   removeEntityCommand,
@@ -13,6 +12,7 @@ import {
   showEntityCommand
 } from "./cli/handlers/entity.js";
 import { importToolkitCommand, initToolkitCommand } from "./cli/handlers/project.js";
+import { timelineCommand } from "./cli/handlers/timeline.js";
 import { defineCommands } from "./cli/registry.js";
 import {
   buildBook,
@@ -35,7 +35,6 @@ import {
   removeEntity,
   renameEntity,
   seriesReport,
-  storyTimeline,
   synopsisBook,
   validateLinks,
   validateProject
@@ -224,15 +223,12 @@ const COMMAND_LIST = [
     name: "timeline",
     usage: "timeline [path]",
     summary: [
-      "Show scenes in story-time order (marking scenes told",
-      "out of order), POV balance, and character presence"
+      "Show reading order and partial story chronology;",
+      "schema v2 keeps dated scenes, POV, and presence"
     ],
     project: "positional",
-    run({ io, root }) {
-      const timeline = storyTimeline(root());
-      io.stdout.write(formatTimeline(timeline, timeline.totalChapters));
-      return reportResult(io, timeline, "Timeline built", "Timeline failed");
-    }
+    returnsResult: true,
+    run: timelineCommand
   },
   {
     name: "prose",
