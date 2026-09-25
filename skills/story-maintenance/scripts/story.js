@@ -23065,7 +23065,7 @@ function buildChronology(project) {
   for (const edge of timestampEdges)
     addConstraint(edge.earlier, edge.later, "timestamp");
   constraints.sort((left, right) => left.earlier.localeCompare(right.earlier, "en") || left.later.localeCompare(right.later, "en") || left.reason.localeCompare(right.reason, "en"));
-  const placed = new Set;
+  const placed = new Set(cyclic.flat());
   for (const edge of constraints) {
     placed.add(edge.earlier);
     placed.add(edge.later);

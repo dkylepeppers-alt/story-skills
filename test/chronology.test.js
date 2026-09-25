@@ -305,6 +305,15 @@ describe("partial chronology", () => {
     expect(order.diagnostics.filter((item) => item.code === "CYCLE")).toHaveLength(1);
   });
 
+  test("a self-loop scene is cyclic, not also unplaced", async () => {
+    const p = await makeProject();
+    await p.addScene({ id: "scn_loop", title: "Loop", chronology: { after: ["scn_loop"] } });
+    await p.addScene({ id: "scn_other", title: "Other" });
+    const order = buildChronology(await p.load());
+    expect(order.storyOrder.cyclic).toEqual([["scn_loop"]]);
+    expect(order.storyOrder.unplaced).toEqual(["scn_other"]);
+  });
+
   test("a joined partial order keeps unrelated branches unordered", async () => {
     const p = await makeProject();
     await p.addScene({ id: "scn_a", title: "A" });
