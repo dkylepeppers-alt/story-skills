@@ -21,6 +21,9 @@ const ACTIONS = {
   FACT_NOT_FOUND: "Check the id with story fact list --include-inactive.",
   FACT_TRANSITION_INVALID: "Only proposed or established facts can be retracted.",
   SOURCE_UNREADABLE: "Point the source at a file, scene, and beat that exist.",
+  RECORD_NOT_FOUND: "Check the id with story entity show.",
+  DECISION_NOT_FOUND: "Check the id with story decision list --include-inactive.",
+  DECISION_TRANSITION_INVALID: "Only proposed or accepted decisions can be superseded.",
   COMMAND_FAILED: "Fix the reported error and run the command again."
 };
 

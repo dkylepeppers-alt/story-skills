@@ -11,6 +11,7 @@ import {
   renameEntityCommand,
   showEntityCommand
 } from "./cli/handlers/entity.js";
+import { addDecisionCommand, listDecisionsCommand, supersedeDecisionCommand } from "./cli/handlers/decision.js";
 import { addFactCommand, listFactsCommand, retractFactCommand } from "./cli/handlers/fact.js";
 import { knowledgeCommand } from "./cli/handlers/knowledge.js";
 import { importToolkitCommand, initToolkitCommand } from "./cli/handlers/project.js";
@@ -537,6 +538,67 @@ const COMMAND_LIST = [
     ],
     examples: ["story fact retract fact_key_handoff"],
     run: retractFactCommand
+  },
+  {
+    name: "decision",
+    path: ["decision", "add"],
+    usage: "decision add --data <json-file>",
+    summary: ["Record a scoped author decision from schema-validated data"],
+    project: "discover",
+    mutates: true,
+    returnsResult: true,
+    strictOptions: true,
+    enforceArgs: true,
+    optionSchema: [
+      { name: "project" },
+      { name: "path" },
+      { name: "format", values: ["text", "json"] },
+      { name: "dry-run" },
+      { name: "data", required: true }
+    ],
+    examples: ["story decision add --data decision.json"],
+    run: addDecisionCommand
+  },
+  {
+    name: "decision",
+    path: ["decision", "list"],
+    usage: "decision list",
+    summary: ["List decisions; only accepted ones are instructions"],
+    project: "discover",
+    mutates: false,
+    returnsResult: true,
+    strictOptions: true,
+    enforceArgs: true,
+    optionSchema: [
+      { name: "project" },
+      { name: "path" },
+      { name: "format", values: ["text", "json"] },
+      { name: "include-inactive" },
+      { name: "record" }
+    ],
+    examples: ["story decision list --record scn_cellar"],
+    run: listDecisionsCommand
+  },
+  {
+    name: "decision",
+    path: ["decision", "supersede"],
+    usage: "decision supersede <id> --data <json-file>",
+    summary: ["Replace a decision with an accepted successor in", "one transaction"],
+    project: "discover",
+    mutates: true,
+    returnsResult: true,
+    strictOptions: true,
+    enforceArgs: true,
+    args: [{ name: "id", required: true }],
+    optionSchema: [
+      { name: "project" },
+      { name: "path" },
+      { name: "format", values: ["text", "json"] },
+      { name: "dry-run" },
+      { name: "data", required: true }
+    ],
+    examples: ["story decision supersede dec_tense --data successor.json"],
+    run: supersedeDecisionCommand
   }
 ];
 

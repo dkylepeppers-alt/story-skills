@@ -1,4 +1,13 @@
-import { finding } from "../cli/result.js";
+import fs from "node:fs";
+import path from "node:path";
+import { FORMAT, SCHEMA_VERSION } from "../contracts.js";
+import { envelope, failure, finding } from "../cli/result.js";
+import { loadErrorResult, openProject } from "../project/entities.js";
+import { ID_PATTERN, allocateId, uniqueFilename } from "../project/identity.js";
+import { danglingReferenceDiagnostics } from "../project/references.js";
+import { validateRecord } from "../project/schema.js";
+import { parseFrontmatter, replaceFrontmatter, stringifyFrontmatter } from "../storage/document.js";
+import { findingsResult, invalid, readData, takenNames, writeResult } from "./common.js";
 
 const byId = (left, right) => left.id.localeCompare(right.id, "en");
 
@@ -135,4 +144,187 @@ export function decisionFindings(project) {
     }
   }
   return findings;
+}
+
+// Commands: `decision add|list|supersede`.
+
+const NEW_STATUSES = new Set(["proposed", "accepted", "rejected"]);
+const SUPERSEDABLE = new Set(["proposed", "accepted"]);
+const ACTIVE = new Set(["proposed", "accepted"]);
+
+function newRecord(project, data, defaults) {
+  const record = { format: FORMAT, "schema-version": SCHEMA_VERSION, id: data.id, type: "decision", ...defaults, ...data };
+  if (record.id === undefined) record.id = allocateId("decision", new Set(project.records.keys()));
+  return record;
+}
+
+function recordProblem(command, project, record) {
+  if (record.type !== "decision") return invalid(command, `${command} creates records of type decision`);
+  if (typeof record.id !== "string" || !ID_PATTERN.test(record.id)) return invalid(command, `Invalid id: ${record.id}`);
+  if (project.records.has(record.id)) {
+    return failure(command, `Record id ${record.id} is already used`, "DUPLICATE_RECORD_ID", 1, [record.id]);
+  }
+  return null;
+}
+
+function schemaProblem(command, record) {
+  const schema = validateRecord(record);
+  return schema.length > 0 ? findingsResult(command, schema, 2) : null;
+}
+
+function withEntries(project, entries) {
+  const records = new Map(project.records);
+  for (const entry of entries) records.set(entry.id, entry);
+  return { root: project.root, records, unindexed: project.unindexed };
+}
+
+function newEntry(root, record) {
+  const relative = `decisions/${uniqueFilename(record.id, record.id, takenNames(root, "decisions"))}`;
+  return { id: record.id, type: "decision", path: relative, record, body: "", valid: true };
+}
+
+function ownDangling(project, id) {
+  return danglingReferenceDiagnostics(project).filter((item) => item.recordIds[1] === id);
+}
+
+/**
+ * `decision add --data <json-file>`: records a proposed, accepted, or
+ * rejected decision scoped to at least one project, record, or scene id.
+ * Replacing a decision is `decision supersede`, never a hand-written link.
+ */
+export function addDecision(root, options = {}) {
+  const command = "decision add";
+  if (options.dataPath === undefined) return invalid(command, "Usage: story decision add --data <json-file>");
+  const opened = openProject(root, command);
+  if (opened.error) return opened.error;
+  const { project } = opened;
+  const blocked = loadErrorResult(command, project);
+  if (blocked) return blocked;
+  const read = readData(command, options.cwd ?? process.cwd(), options.dataPath);
+  if (read.error) return read.error;
+  const record = newRecord(project, read.data, {});
+  const problem = recordProblem(command, project, record);
+  if (problem) return problem;
+  if (!NEW_STATUSES.has(record.status)) {
+    return invalid(command, "A new decision is proposed, accepted, or rejected; use decision supersede to replace one");
+  }
+  if (record.supersedes !== undefined) {
+    return invalid(command, "Use story decision supersede <id> to replace a decision; decision add does not write supersedes");
+  }
+  if (!Array.isArray(record["scope-ids"]) || record["scope-ids"].length === 0) {
+    return invalid(command, "A decision needs scope-ids: the project id, record ids, or scene ids it applies to");
+  }
+  const schema = schemaProblem(command, record);
+  if (schema) return schema;
+  const entry = newEntry(root, record);
+  const dangling = ownDangling(withEntries(project, [entry]), record.id);
+  if (dangling.length > 0) return findingsResult(command, dangling, 1);
+  const writes = [{ path: entry.path, action: "create", expectedHash: null, content: stringifyFrontmatter(record) }];
+  return writeResult(command, root, writes, options, {
+    data: summarize(entry, new Map()),
+    text: `Added decision ${record.id}: ${entry.path}\n`
+  });
+}
+
+function describeDecision(item) {
+  const note = item.status === "proposed" ? ", not an instruction" : "";
+  let line = `- ${item.id} [${item.status}${note}] scope ${item.scopeIds.join(", ")}`;
+  if (item.rationale !== null) line += `: ${item.rationale}`;
+  if (item.source !== null) line += ` (source: ${item.source})`;
+  if (item.supersedes.length > 0) line += ` (supersedes ${item.supersedes.join(", ")})`;
+  if (item.supersededBy.length > 0) line += ` (superseded by ${item.supersededBy.join(", ")})`;
+  return line;
+}
+
+/**
+ * `decision list`: proposed and accepted decisions, with rejected and
+ * superseded ones on request. `--record` keeps decisions scoped to that
+ * record or to the whole project.
+ */
+export function listDecisions(root, options = {}) {
+  const command = "decision list";
+  const opened = openProject(root, command);
+  if (opened.error) return opened.error;
+  const { project } = opened;
+  const record = options.record ?? null;
+  if (record !== null && !project.records.has(record)) {
+    return failure(command, `No record with id ${record}`, "RECORD_NOT_FOUND", 1, [record]);
+  }
+  const scope = new Set(record === null ? [] : [record, projectId(project)]);
+  const decisions = summarizeDecisions(project)
+    .filter((item) => options.includeInactive === true || ACTIVE.has(item.status))
+    .filter((item) => record === null || item.scopeIds.some((id) => scope.has(id)));
+  const diagnostics = decisionFindings(project);
+  const ok = !diagnostics.some((item) => item.severity === "error");
+  const lines = [record === null ? "Decisions:" : `Decisions for ${record}:`];
+  if (decisions.length === 0) lines.push("- None");
+  for (const item of decisions) lines.push(describeDecision(item));
+  if (diagnostics.length > 0) {
+    lines.push("", "Diagnostics:");
+    for (const item of diagnostics) lines.push(`- ${item.severity} ${item.code}: ${item.message}`);
+  }
+  return {
+    envelope: envelope({ command, ok, data: { record, decisions }, diagnostics }),
+    exitCode: ok ? 0 : 1,
+    text: `${lines.join("\n")}\n`
+  };
+}
+
+/**
+ * `decision supersede <id> --data <json-file>`: creates an accepted successor
+ * that supersedes `<id>` and marks `<id>` superseded, in one transaction. The
+ * successor inherits the prior scope unless the data names its own.
+ */
+export function supersedeDecision(root, id, options = {}) {
+  const command = "decision supersede";
+  if (!id || options.dataPath === undefined) return invalid(command, "Usage: story decision supersede <id> --data <json-file>");
+  const opened = openProject(root, command);
+  if (opened.error) return opened.error;
+  const { project } = opened;
+  const blocked = loadErrorResult(command, project);
+  if (blocked) return blocked;
+  const prior = project.records.get(id);
+  if (!prior || prior.type !== "decision") return failure(command, `No decision with id ${id}`, "DECISION_NOT_FOUND", 1, [id]);
+  const from = prior.record.status;
+  if (!SUPERSEDABLE.has(from)) {
+    return failure(command, `Decision ${id} is ${from}; only proposed or accepted decisions can be superseded`, "DECISION_TRANSITION_INVALID", 1, [id]);
+  }
+  const read = readData(command, options.cwd ?? process.cwd(), options.dataPath);
+  if (read.error) return read.error;
+  const supplied = read.data.supersedes;
+  if (supplied !== undefined && !(Array.isArray(supplied) && supplied.length === 1 && supplied[0] === id)) {
+    return invalid(command, `A successor supersedes exactly ${id}; leave supersedes out of --data`);
+  }
+  const record = newRecord(project, read.data, { status: "accepted", "scope-ids": prior.record["scope-ids"] });
+  record.supersedes = [id];
+  const problem = recordProblem(command, project, record);
+  if (problem) return problem;
+  if (record.status !== "accepted") {
+    return invalid(command, "A successor is accepted. Record an alternative that is only proposed with decision add");
+  }
+  const schema = schemaProblem(command, record);
+  if (schema) return schema;
+
+  const entry = newEntry(root, record);
+  const priorRecord = { ...prior.record, status: "superseded" };
+  const after = withEntries(project, [entry, { ...prior, record: priorRecord }]);
+  const problems = [
+    ...ownDangling(after, record.id),
+    ...decisionFindings(after).filter((item) => item.code === "SUPERSESSION_CYCLE" && item.recordIds.includes(record.id))
+  ];
+  if (problems.length > 0) return findingsResult(command, problems, 1);
+
+  const priorPath = prior.path.split(path.sep).join("/");
+  const markdown = fs.readFileSync(path.join(root, prior.path), "utf8");
+  const writes = [
+    { path: entry.path, action: "create", expectedHash: null, content: stringifyFrontmatter(record) },
+    { path: priorPath, action: "replace", expectedHash: prior.hash, content: replaceFrontmatter(markdown, { ...parseFrontmatter(markdown, prior.path).data, status: "superseded" }) }
+  ];
+  return writeResult(command, root, writes, options, {
+    data: {
+      prior: { id, path: priorPath, from, to: "superseded" },
+      successor: summarize(entry, new Map())
+    },
+    text: `Superseded decision ${id} with ${record.id}\n`
+  });
 }

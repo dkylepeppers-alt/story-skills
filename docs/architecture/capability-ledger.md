@@ -54,9 +54,10 @@ status|update|remove`, `context`, `entity …`, `check --only`, `snapshot`,
 `changes`, `impact`, `reconcile`, `repair`, `decision|issue|fact add|list|…`,
 `series link|check|timeline`, `assets`, `shots`, `publish check`) are specified
 by the design's command matrix; they are additions, not ledger dispositions.
-Task 3 registers `entity add|rename|remove|show` and Task 5 registers
-`fact add|list|retract`. The other names above are not registered and fail as
-unknown commands (`test/command-contract.test.js`).
+Task 3 registers `entity add|rename|remove|show`, Task 5 registers
+`fact add|list|retract`, and Task 6 registers `decision add|list|supersede`.
+The other names above are not registered and fail as unknown commands
+(`test/command-contract.test.js`).
 
 Task 3 adds the `format: story-toolkit` layer beside schema v2. Default
 `init`, `import`, `add`, `rename`, and `remove` still scaffold and edit schema
@@ -125,7 +126,14 @@ Story-toolkit projects never read `continuity/exemptions.md`; schema v2
 Wiring dismissals into `check` is the checks task. Decisions
 (`src/memory/decisions.js`) apply by `scope-ids`, where the project id means
 the whole project. Only accepted decisions are instructions, and
-supersession cycles are `SUPERSESSION_CYCLE` errors.
+supersession cycles are `SUPERSESSION_CYCLE` errors. `decision add --data`
+records a proposed, accepted, or rejected decision with at least one scope
+id; scope ids go through the shared reference index. `decision list` shows
+proposed and accepted decisions (`--include-inactive` adds rejected and
+superseded; `--record <id>` keeps that record's and project-wide scope).
+`decision supersede <id> --data` creates an accepted successor that
+supersedes `<id>` and marks `<id>` superseded in one transaction, refusing a
+successor that would close a cycle.
 
 ## 2. CLI options
 
@@ -149,11 +157,12 @@ them to `--kind`.
 | Undocumented aliases | `--locations --characters --mentions --members --arcs --aliases --act --sources` | Intentionally removed once schema v2 `add` is replaced (undocumented convenience aliases; behavior replaced by repeatable documented forms and `--data`). Task 3 still accepts them because v2 `add` and `test/cli.test.js` use them | 3 | `test/cli.test.js` |
 | Global (new) | `--help/-h --version/-v` | Retained. `--help` and `--version` stay plain text even when `--format json` is present | 3 | `test/registry.test.js`, `test/command-contract.test.js` |
 | Result envelope (new) | `--format text\|json` | Stdout is one JSON result object when the value is `json`; logs stay on stderr. `text` is the plain result | 3 | `test/command-contract.test.js` |
-| Mutation preview (new) | `--dry-run` | Added in Task 3 for fork init, import, and entity mutations; Task 5 adds `fact add` and `fact retract` | 3, 5 | `test/project.test.js`, `test/state.test.js` |
+| Mutation preview (new) | `--dry-run` | Added in Task 3 for fork init, import, and entity mutations; Task 5 adds `fact add` and `fact retract`; Task 6 adds decision mutations | 3, 5, 6 | `test/project.test.js`, `test/state.test.js`, `test/memory.test.js` |
 | Removal policy (new) | `--policy refuse\|detach` | Added in Task 3 for `entity remove` | 3 | `test/rename-remove.test.js` |
-| Structured data (new) | `--data <json-file>` | Added in Task 5 for `fact add` | 5 | `test/state.test.js` |
+| Structured data (new) | `--data <json-file>` | Added in Task 5 for `fact add`; Task 6 adds `decision add` and `decision supersede` | 5, 6 | `test/state.test.js`, `test/memory.test.js` |
 | Story cursor (new) | `--scene <n\|id> --beat <id> --side before\|after` | Task 5 `fact list` and `knowledge` cursor. `--scene` still takes a scene number for schema v2 `add`; `--side` defaults to `before` | 5 | `test/state.test.js` |
-| Inactive records (new) | `--include-inactive --include-work` | Added in Task 5 for `fact list`. Listing never makes an inactive or `work/` record apply at a cursor | 5 | `test/state.test.js` |
+| Inactive records (new) | `--include-inactive --include-work` | Added in Task 5 for `fact list`. Listing never makes an inactive or `work/` record apply at a cursor. Task 6 adds `--include-inactive` to `decision list` | 5, 6 | `test/state.test.js`, `test/memory.test.js` |
+| Record scope (new) | `--record <id>` | Added in Task 6 for `decision list` | 6 | `test/memory.test.js` |
 | Fork selector (new) | `--toolkit` | Added in Task 3. Selects story-toolkit `init` and `import` | 3 | `test/project.test.js`, `test/command-contract.test.js` |
 
 ## 3. Skills
