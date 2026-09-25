@@ -14128,12 +14128,11 @@ var OPTIONS = [
   { name: "against", value: "<path>", help: ["Earlier draft as another project folder for compare"] },
   { name: "path", value: "<path>", help: ["Project root for every command except init and", "import"] },
   { name: "project", value: "<path>", help: ["Project root; discovered when omitted"] },
-  { name: "json", help: ["Print one JSON result envelope on stdout"] },
   { name: "dry-run", help: ["Preview a mutation without writing files"] },
   { name: "policy", value: "<name>", help: ["entity remove policy: refuse or detach"] },
   { name: "toolkit", help: ["Create or import a story-toolkit project"] },
   { name: "out", value: "<file>", help: ["Output path for export/build/synopsis"] },
-  { name: "format", value: "<name>", help: ["Output format for build (markdown, epub, docx,", "shunn)"] },
+  { name: "format", value: "<name>", help: ["Result text or json; build kind markdown,", "epub, docx, or shunn"] },
   { name: "shunn", help: ["Apply Shunn manuscript formatting (with --format", "docx)"] },
   { name: "at", value: "<chapter-id>", help: ["Chapter id for knowledge"] },
   { name: "pages", value: "<n>", help: ["Synopsis length for synopsis (1 or 3)"] },
@@ -14299,10 +14298,10 @@ function parseArgs(argv) {
   return { positionals, options };
 }
 // src/cli/dispatch.js
-import path15 from "node:path";
+import path16 from "node:path";
 
 // src/commands.js
-import path14 from "node:path";
+import path15 from "node:path";
 
 // src/compare.js
 function compareChapters(previous, current) {
@@ -14501,11 +14500,17 @@ function replaceFrontmatter(markdown, data, bodyOverride) {
       lines.push(block.line);
       continue;
     }
-    if (!Object.prototype.hasOwnProperty.call(data, block.key) || data[block.key] === undefined) {
+    if (!Object.prototype.hasOwnProperty.call(data, block.key)) {
+      continue;
+    }
+    const value = data[block.key];
+    if (value === undefined) {
+      const removed = serializeEntry(block.key, value, block);
+      if (removed.length > 0)
+        lines.push(...removed);
       continue;
     }
     written.add(block.key);
-    const value = data[block.key];
     if (isDeepEqual(current[block.key], value)) {
       lines.push(...block.lines);
     } else {
@@ -14935,6 +14940,8 @@ function failure(command, message, code, exitCode, recordIds = [], evidence = "s
 }
 function present(ctx, finished) {
   if (ctx.json) {
+    if (finished.log)
+      ctx.io.stderr.write(finished.log);
     ctx.io.stderr.write(`story: ${finished.envelope.command}
 `);
   } else {
@@ -14952,22 +14959,14 @@ function present(ctx, finished) {
   return finished;
 }
 function argvRequestsJson(argv) {
-  let enabled = false;
   for (let index = 0;index < argv.length; index += 1) {
     const arg = argv[index];
-    if (arg === "--json") {
-      const next = argv[index + 1];
-      if (typeof next === "string" && /^(true|false|0|1|yes|no|on|off)$/i.test(next)) {
-        enabled = !/^(false|0|no|off)$/i.test(next);
-        index += 1;
-      } else {
-        enabled = true;
-      }
-    } else if (arg.startsWith("--json=")) {
-      enabled = !/^(false|0|no|off)$/i.test(arg.slice("--json=".length));
-    }
+    if (arg === "--format" && argv[index + 1] === "json")
+      return true;
+    if (arg === "--format=json")
+      return true;
   }
-  return enabled;
+  return false;
 }
 function invocationEnvelope(command, message) {
   return envelope({
@@ -15188,7 +15187,7 @@ function errorResult(messages) {
         action: "Make every imported id unique and schema-valid, then import into a new directory."
       }))
     }),
-    exitCode: 1,
+    exitCode: 2,
     text: `${messages.join(`
 `)}
 `
@@ -15414,6 +15413,45 @@ function findCaseCollision(rootReal, absPath) {
 // src/storage/spans.js
 var SCENE_MARKER_PATTERN = /^[ \t]*<!--\s+story-scene:\s+([a-z0-9][a-z0-9_-]*)\s*-->\s*$/;
 var BEAT_MARKER_PATTERN = /^[ \t]*<!--\s+story-beat:\s+([a-z0-9][a-z0-9_-]*)\s*-->\s*$/;
+var MARKER_LOOKALIKE_PATTERN = /<!--\s*story-(?:scene|beat):/;
+function findMarkers(body) {
+  const lines = body.split(/(?<=\n)/);
+  const scenes = [];
+  const beats = [];
+  const diagnostics = [];
+  let offset = 0;
+  for (const line of lines) {
+    const content = line.replace(/\r?\n$/, "");
+    const sceneMatch = SCENE_MARKER_PATTERN.exec(content);
+    const beatMatch = sceneMatch ? null : BEAT_MARKER_PATTERN.exec(content);
+    if (sceneMatch) {
+      scenes.push({ id: sceneMatch[1], start: offset, end: offset });
+    } else if (beatMatch) {
+      beats.push({ id: beatMatch[1], start: offset, end: offset });
+    } else if (MARKER_LOOKALIKE_PATTERN.test(content)) {
+      diagnostics.push({
+        code: "MALFORMED_MARKER",
+        severity: "error",
+        message: `Marker comment does not match the documented syntax: ${content.trim()}`,
+        recordIds: [],
+        sources: [],
+        evidence: "structural",
+        action: "Rewrite the marker as <!-- story-scene: <scene-id> --> or <!-- story-beat: <beat-id> --> with a lowercase id."
+      });
+    }
+    offset += Buffer.byteLength(line, "utf8");
+  }
+  for (const scene of scenes) {
+    const next = scenes.find((other) => other.start > scene.start);
+    scene.end = next ? next.start : Buffer.byteLength(body, "utf8");
+  }
+  for (const beat of beats) {
+    const containingScene = [...scenes].reverse().find((scene) => scene.start <= beat.start);
+    const nextBeat = beats.find((other) => other.start > beat.start && (!containingScene || other.start < containingScene.end));
+    beat.end = nextBeat ? nextBeat.start : containingScene ? containingScene.end : Buffer.byteLength(body, "utf8");
+  }
+  return { scenes, beats, diagnostics };
+}
 function stripMarkers(text) {
   return text.split(/(?<=\n)/).filter((line) => {
     const content = line.replace(/\r?\n$/, "");
@@ -17272,18 +17310,18 @@ function discoverProject(start) {
     return null;
   let current = path7.resolve(start);
   const filesystemRoot = path7.parse(current).root;
-  while (true) {
-    const candidate = path7.join(current, "story.md");
-    try {
-      if (fs5.statSync(candidate).isFile())
-        return current;
-    } catch {}
-    if (current === filesystemRoot)
-      return null;
-    const parent = path7.dirname(current);
-    if (parent === current)
-      return null;
-    current = parent;
+  while (current !== filesystemRoot) {
+    if (hasStory(current))
+      return current;
+    current = path7.dirname(current);
+  }
+  return hasStory(current) ? current : null;
+}
+function hasStory(directory) {
+  try {
+    return fs5.statSync(path7.join(directory, "story.md")).isFile();
+  } catch {
+    return false;
   }
 }
 // src/project/init.js
@@ -21736,7 +21774,7 @@ ${prose}
 
 // src/project/entities.js
 import fs11 from "node:fs";
-import path13 from "node:path";
+import path14 from "node:path";
 
 // src/storage/hash.js
 import { createHash } from "node:crypto";
@@ -21803,17 +21841,17 @@ function writeTransactionSync(root, writes, options = {}) {
       }
     } catch (error) {
       const conflicts = rollbackApplied(root, applied);
+      let failure2 = error;
       if (conflicts.length > 0) {
-        throw new StorageError("ROLLBACK_CONFLICT", `Transaction ${transactionId} could not be fully rolled back; external edits were preserved. Inspect its journal before repair.`, {
+        failure2 = new StorageError("ROLLBACK_CONFLICT", `Transaction ${transactionId} could not be fully rolled back; external edits were preserved. Inspect its journal before repair.`, {
           transactionId,
           cause: error.code ?? "OPERATION_FAILED",
           conflicts
         });
+      } else if (!(error instanceof StorageError)) {
+        failure2 = new StorageError("OPERATION_FAILED", `Transaction ${transactionId} failed: ${error.message}`);
       }
-      if (error instanceof StorageError) {
-        throw error;
-      }
-      throw new StorageError("OPERATION_FAILED", `Transaction ${transactionId} failed: ${error.message}`);
+      throw failure2;
     }
     try {
       fs9.rmSync(transactionDir, { recursive: true, force: true });
@@ -22046,7 +22084,173 @@ function summarizeWrite(write) {
 
 // src/project/load.js
 import fs10 from "node:fs";
+import path13 from "node:path";
+
+// src/project/references.js
 import path12 from "node:path";
+var ID_REFERENCE = /^[a-z][a-z0-9]*_[a-z0-9_-]+$/;
+var SCALAR_FIELDS = [
+  ["chapter-id", "chapter-id", true],
+  ["scene-id", "scene-id", true],
+  ["beat-id", "beat-id", true]
+];
+var LIST_FIELDS = [
+  ["cast", "cast", false],
+  ["affected-ids", "affected-ids", true],
+  ["scope-ids", "scope-ids", true],
+  ["supersedes", "supersedes", true],
+  ["depicts", "depicts", true],
+  ["used-by", "used-by", true],
+  ["unresolved-facts", "unresolved-facts", true]
+];
+var CURSOR_FIELDS = ["valid-from", "valid-until"];
+var SOURCE_LIST_FIELDS = ["sources", "evidence"];
+function isIdReference(value) {
+  return typeof value === "string" && ID_REFERENCE.test(value);
+}
+function slash(value) {
+  return String(value).split(path12.sep).join("/");
+}
+function pushId(refs, field, id, required) {
+  if (typeof id !== "string" || id.length === 0)
+    return;
+  refs.push({ field, id, required });
+}
+function addTextRef(refs, field, value, targetId) {
+  if (typeof value !== "string" || value.length === 0)
+    return;
+  if (isIdReference(value) || targetId !== undefined && value === targetId) {
+    pushId(refs, field, value, true);
+  }
+}
+function addCursor(refs, field, cursor) {
+  if (!cursor || typeof cursor !== "object" || Array.isArray(cursor))
+    return;
+  pushId(refs, field, cursor.scene, true);
+  pushId(refs, `${field}.beat`, cursor.beat, true);
+}
+function addSource(refs, field, source) {
+  if (!source || typeof source !== "object" || Array.isArray(source))
+    return;
+  pushId(refs, field, source.scene, true);
+  pushId(refs, `${field}.beat`, source.beat, true);
+}
+function referencesInRecord(record, targetId) {
+  const refs = [];
+  const data = record && typeof record === "object" && !Array.isArray(record) ? record : {};
+  addTextRef(refs, "subject", data.subject, targetId);
+  addTextRef(refs, "value", data.value, targetId);
+  for (const field of CURSOR_FIELDS)
+    addCursor(refs, field, data[field]);
+  for (const field of SOURCE_LIST_FIELDS) {
+    if (!Array.isArray(data[field]))
+      continue;
+    for (const source of data[field])
+      addSource(refs, field, source);
+  }
+  addSource(refs, "source", data.source);
+  for (const [key, field, required] of SCALAR_FIELDS)
+    pushId(refs, field, data[key], required);
+  for (const [key, field, required] of LIST_FIELDS) {
+    if (!Array.isArray(data[key]))
+      continue;
+    for (const id of data[key])
+      pushId(refs, field, id, required);
+  }
+  const after = data.chronology && Array.isArray(data.chronology.after) ? data.chronology.after : [];
+  for (const id of after)
+    pushId(refs, "after", id, false);
+  const dismissal = data.dismissal;
+  if (dismissal && typeof dismissal === "object" && !Array.isArray(dismissal)) {
+    pushId(refs, "dismissal.record-id", dismissal["record-id"], true);
+  }
+  if (Array.isArray(data.references)) {
+    for (const item of data.references) {
+      if (item && typeof item === "object")
+        pushId(refs, "references", item.asset, true);
+    }
+  }
+  return refs;
+}
+function projectEntries(project) {
+  return [...project.records.values(), ...project.unindexed ?? []];
+}
+function inspectEntry(entry, targetId) {
+  const refs = referencesInRecord(entry?.record, targetId);
+  const beats = [];
+  if (entry?.record?.type === "chapter" && typeof entry.body === "string") {
+    const markers = findMarkers(entry.body);
+    for (const scene of markers.scenes) {
+      refs.push({ field: "story-scene", id: scene.id, required: true });
+    }
+    for (const beat of markers.beats)
+      beats.push(beat.id);
+  }
+  return { refs, beats };
+}
+function knownIds(project, beats) {
+  const known = new Set(beats);
+  for (const entry of projectEntries(project)) {
+    if (typeof entry.id === "string" && entry.id.length > 0)
+      known.add(entry.id);
+  }
+  return known;
+}
+function danglingReferenceDiagnostics(project) {
+  const diagnostics = [];
+  const beats = [];
+  const refs = [];
+  for (const entry of projectEntries(project)) {
+    const found = inspectEntry(entry);
+    beats.push(...found.beats);
+    for (const ref of found.refs) {
+      refs.push({ ...ref, ownerId: entry.id, ownerPath: slash(entry.path) });
+    }
+  }
+  const known = knownIds(project, beats);
+  for (const ref of refs) {
+    if (known.has(ref.id))
+      continue;
+    const recordIds = typeof ref.ownerId === "string" ? [ref.id, ref.ownerId] : [ref.id];
+    diagnostics.push({
+      code: "DANGLING_REFERENCE",
+      severity: "error",
+      message: `${ref.ownerPath}: ${ref.field} references missing id ${ref.id}`,
+      recordIds,
+      sources: [],
+      evidence: "structural",
+      action: "Restore the referenced record, or update the reference so it names an id that exists."
+    });
+  }
+  return diagnostics;
+}
+function classifyReferences(project, targetId) {
+  const required = [];
+  const optional = [];
+  for (const entry of projectEntries(project)) {
+    if (entry.id === targetId)
+      continue;
+    const matched = inspectEntry(entry, targetId).refs.filter((ref) => ref.id === targetId);
+    if (matched.length === 0)
+      continue;
+    const requiredFields = [];
+    const optionalFields = [];
+    for (const ref of matched) {
+      const list = ref.required ? requiredFields : optionalFields;
+      if (!list.includes(ref.field))
+        list.push(ref.field);
+    }
+    if (requiredFields.length > 0) {
+      const fact = requiredFields.includes("subject") || requiredFields.includes("value");
+      required.push({ entry, fields: requiredFields, kind: fact ? "fact" : "schema" });
+    }
+    if (optionalFields.length > 0)
+      optional.push({ entry, fields: optionalFields });
+  }
+  return { required, optional };
+}
+
+// src/project/load.js
 var RECORD_DIRECTORIES = [
   "characters",
   "worldbuilding",
@@ -22076,31 +22280,37 @@ function diagnostic2(code, message, action2) {
 function loadProjectSync(root) {
   const diagnostics = [];
   const records = new Map;
+  const unindexed = [];
   function addRecord(relativePath) {
     const entry = loadRecord(root, relativePath, diagnostics);
     if (!entry)
       return;
+    if (!entry.valid) {
+      unindexed.push(entry);
+      return;
+    }
     if (records.has(entry.id)) {
       diagnostics.push(diagnostic2("DUPLICATE_RECORD_ID", `Record id ${entry.id} is already used by ${records.get(entry.id).path}`, "Ids are unique across the project; give one of the records a fresh explicit id."));
+      unindexed.push(entry);
       return;
     }
     records.set(entry.id, entry);
   }
-  const storyPath = path12.join(root, "story.md");
+  const storyPath = path13.join(root, "story.md");
   if (!fs10.existsSync(storyPath)) {
     diagnostics.push(diagnostic2("PROJECT_ROOT_MISSING", `No story.md at ${root}`, "Point --project at the directory containing story.md, or run story init."));
   } else {
     addRecord("story.md");
   }
-  if (fs10.existsSync(path12.join(root, "series.md")))
+  if (fs10.existsSync(path13.join(root, "series.md")))
     addRecord("series.md");
   function walk(directory, optional = false) {
-    const absolute = path12.join(root, directory);
+    const absolute = path13.join(root, directory);
     let entries;
     try {
       let current = root;
-      for (const part of directory.split(path12.sep)) {
-        current = path12.join(current, part);
+      for (const part of directory.split(path13.sep)) {
+        current = path13.join(current, part);
         if (fs10.lstatSync(current).isSymbolicLink()) {
           diagnostics.push(diagnostic2("RECORD_UNREADABLE", `${directory}: record directories must not contain symlinks`, "Use a directory inside this project."));
           return;
@@ -22116,7 +22326,7 @@ function loadProjectSync(root) {
     for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
       if (entry.name.startsWith("_") || entry.name.startsWith("."))
         continue;
-      const relative3 = path12.join(directory, entry.name);
+      const relative3 = path13.join(directory, entry.name);
       if (entry.isDirectory())
         walk(relative3);
       else if (entry.isFile() && entry.name.endsWith(".md"))
@@ -22128,10 +22338,11 @@ function loadProjectSync(root) {
   }
   for (const directory of RECORD_DIRECTORIES)
     walk(directory, true);
-  return { root, records, diagnostics };
+  diagnostics.push(...danglingReferenceDiagnostics({ records, unindexed }));
+  return { root, records, unindexed, diagnostics };
 }
 function loadRecord(root, relativePath, diagnostics) {
-  const absPath = path12.join(root, relativePath);
+  const absPath = path13.join(root, relativePath);
   let bytes;
   let markdown;
   try {
@@ -22155,24 +22366,25 @@ function loadRecord(root, relativePath, diagnostics) {
   for (const finding2 of findings) {
     diagnostics.push({ ...finding2, message: `${relativePath}: ${finding2.message}` });
   }
-  if (findings.length > 0 || typeof record.id !== "string") {
+  if (typeof record.id !== "string")
     return null;
-  }
   return {
     id: record.id,
     type: record.type,
     path: relativePath,
     hash: sha256Hex(bytes),
-    record
+    record,
+    body: parsed.body,
+    valid: findings.length === 0
   };
 }
 
 // src/project/entities.js
-function slash(value) {
-  return value.split(path13.sep).join("/");
+function slash2(value) {
+  return value.split(path14.sep).join("/");
 }
 function openProject(root, command) {
-  const story = path13.join(root, "story.md");
+  const story = path14.join(root, "story.md");
   if (!fs11.existsSync(story) || !fs11.statSync(story).isFile()) {
     return { error: failure(command, `No story project at ${root}: missing story.md`, "PROJECT_NOT_FOUND", 2) };
   }
@@ -22209,20 +22421,20 @@ function listMarkdown(root) {
     for (const entry of entries) {
       if (skip.has(entry.name))
         continue;
-      const absolute = path13.join(directory, entry.name);
+      const absolute = path14.join(directory, entry.name);
       if (entry.isSymbolicLink())
         continue;
       if (entry.isDirectory())
         walk(absolute);
       else if (entry.isFile() && entry.name.endsWith(".md"))
-        files.push(slash(path13.relative(root, absolute)));
+        files.push(slash2(path14.relative(root, absolute)));
     }
   };
   walk(root);
   return files.sort();
 }
 function directoryNames(root, directory) {
-  const absolute = path13.join(root, directory);
+  const absolute = path14.join(root, directory);
   if (!fs11.existsSync(absolute))
     return [];
   return fs11.readdirSync(absolute);
@@ -22232,7 +22444,7 @@ function commit(root, writes, dryRun) {
     return [];
   if (dryRun) {
     for (const write of writes) {
-      const absolute = path13.join(root, write.path);
+      const absolute = path14.join(root, write.path);
       if (write.action === "create") {
         if (fs11.existsSync(absolute)) {
           throw new StorageError("STALE_SOURCE", `Create asserts absence but the file already exists: ${write.path}`);
@@ -22245,10 +22457,36 @@ function commit(root, writes, dryRun) {
   }
   for (const write of writes) {
     if (write.action === "create")
-      fs11.mkdirSync(path13.dirname(path13.join(root, write.path)), { recursive: true });
+      fs11.mkdirSync(path14.dirname(path14.join(root, write.path)), { recursive: true });
   }
   writeTransactionSync(root, writes);
   return writes.map(publicWrite);
+}
+var BLOCKING_LOAD_CODES = new Set([
+  "SCHEMA_VIOLATION",
+  "RECORD_UNPARSEABLE",
+  "RECORD_UNREADABLE",
+  "FORMAT_UNSUPPORTED",
+  "FORMAT_UPSTREAM_V2",
+  "SCHEMA_VERSION_UNSUPPORTED",
+  "DUPLICATE_RECORD_ID",
+  "UNKNOWN_RECORD_TYPE"
+]);
+function loadErrorResult(command, project, targetId) {
+  const diagnostics = project.diagnostics.filter((item) => BLOCKING_LOAD_CODES.has(item.code));
+  if (diagnostics.length === 0)
+    return null;
+  if (targetId !== undefined) {
+    const classified = classifyReferences(project, targetId);
+    diagnostics.push(...dependencyDiagnostics(targetId, classified, "refuse"));
+  }
+  return {
+    envelope: envelope({ command, ok: false, diagnostics }),
+    exitCode: 2,
+    text: `${diagnostics.map((item) => item.message).join(`
+`)}
+`
+  };
 }
 function fromStorageError(command, error) {
   const code = error instanceof StorageError ? error.code : "OPERATION_FAILED";
@@ -22280,6 +22518,9 @@ function addEntity(root, options = {}) {
   const opened = openProject(root, command);
   if (opened.error)
     return opened.error;
+  const blocked = loadErrorResult(command, opened.project);
+  if (blocked)
+    return blocked;
   const used = new Set(opened.project.records.keys());
   let id = options.id === undefined ? null : String(options.id).trim();
   if (id !== null) {
@@ -22341,31 +22582,70 @@ function resolveLink(fromRel, target) {
   if (target.startsWith("#") || target === "")
     return null;
   if (target.startsWith("/")) {
-    const resolved2 = path13.posix.normalize(target.slice(1));
+    const resolved2 = path14.posix.normalize(target.slice(1));
     return resolved2.startsWith("..") ? null : resolved2;
   }
-  const resolved = path13.posix.normalize(path13.posix.join(path13.posix.dirname(fromRel), target));
+  const resolved = path14.posix.normalize(path14.posix.join(path14.posix.dirname(fromRel), target));
   if (resolved.startsWith("..") || resolved === "")
     return null;
   return resolved;
 }
-function relativeLink(fromRel, targetRel) {
-  const relative3 = path13.posix.relative(path13.posix.dirname(fromRel), targetRel);
-  return relative3.startsWith(".") ? relative3 : `./${relative3}`;
+function outsideInlineCode(line) {
+  let result = "";
+  let index = 0;
+  while (index < line.length) {
+    const tick = line.indexOf("`", index);
+    if (tick === -1) {
+      result += line.slice(index);
+      break;
+    }
+    result += line.slice(index, tick);
+    let ticks = 0;
+    while (line[tick + ticks] === "`")
+      ticks += 1;
+    const token = "`".repeat(ticks);
+    const closer = line.indexOf(token, tick + ticks);
+    if (closer === -1) {
+      result += line.slice(tick);
+      break;
+    }
+    index = closer + ticks;
+  }
+  return result;
 }
-function rewriteLinks(markdown, fromRel, oldRel, newRel) {
+function proseText(markdown) {
+  let fence = null;
+  const parts = [];
+  for (const line of markdown.split(/(?<=\n)/)) {
+    const marker = /^[ \t]{0,3}(`{3,}|~{3,})(.*)$/.exec(line.replace(/\r?\n$/, ""));
+    if (marker) {
+      const char = marker[1][0];
+      const size = marker[1].length;
+      if (!fence)
+        fence = { char, size };
+      else if (char === fence.char && size >= fence.size && marker[2].trim() === "")
+        fence = null;
+      continue;
+    }
+    if (!fence)
+      parts.push(outsideInlineCode(line));
+  }
+  return parts.join("");
+}
+function staleProseLinks(markdown, fromRel, oldRel, newRel) {
   if (oldRel === newRel)
-    return markdown;
-  return markdown.replace(/\[([^\]]*)\]\(([^)\s]+)\)/g, (full, label, target) => {
-    const hash = target.indexOf("#");
-    const pathPart = hash === -1 ? target : target.slice(0, hash);
-    const suffix = hash === -1 ? "" : target.slice(hash);
-    const resolved = resolveLink(fromRel, pathPart);
-    if (resolved !== oldRel)
-      return full;
-    const next = pathPart.startsWith("/") ? `/${newRel}` : relativeLink(fromRel, newRel);
-    return `[${label}](${next}${suffix})`;
-  });
+    return [];
+  const found = [];
+  for (const match of proseText(markdown).matchAll(/\[[^\]]*\]\(([^)]*)\)/g)) {
+    const inside = match[1].trim();
+    const destination = /^(\S+)/.exec(inside)?.[1] ?? "";
+    const hash = destination.indexOf("#");
+    const pathPart = hash === -1 ? destination : destination.slice(0, hash);
+    if (resolveLink(fromRel, pathPart) !== oldRel)
+      continue;
+    found.push(inside);
+  }
+  return found;
 }
 function rewritePathFields(markdown, file, oldRel, newRel) {
   if (oldRel === newRel)
@@ -22402,12 +22682,15 @@ function renameEntity2(root, id, name, options = {}) {
   const opened = openProject(root, command);
   if (opened.error)
     return opened.error;
+  const blocked = loadErrorResult(command, opened.project);
+  if (blocked)
+    return blocked;
   const entry = opened.project.records.get(id);
   if (!entry || !ENTITY_DIRECTORY[entry.type]) {
     return failure(command, `No entity with id ${id}`, "ENTITY_NOT_FOUND", 1, [id]);
   }
-  const oldRel = slash(entry.path);
-  const absolute = path13.join(root, entry.path);
+  const oldRel = slash2(entry.path);
+  const absolute = path14.join(root, entry.path);
   const original = fs11.readFileSync(absolute);
   const markdown = original.toString("utf8");
   let parsed;
@@ -22416,13 +22699,26 @@ function renameEntity2(root, id, name, options = {}) {
   } catch (error) {
     return failure(command, error.message, "INVALID_INVOCATION", 2, [id]);
   }
-  const updatedData = displayRecord(parsed.data, nextName);
-  let content = replaceFrontmatter(markdown, updatedData);
-  const directory = path13.posix.dirname(oldRel);
-  const taken = new Set(directoryNames(root, directory === "." ? "" : directory).filter((item) => item !== path13.posix.basename(oldRel)));
+  const directory = path14.posix.dirname(oldRel);
+  const taken = new Set(directoryNames(root, directory === "." ? "" : directory).filter((item) => item !== path14.posix.basename(oldRel)));
   const filename = uniqueFilename(slugify(nextName), id, taken);
   const newRel = directory === "." ? filename : `${directory}/${filename}`;
-  content = rewriteLinks(content, newRel, oldRel, newRel);
+  const updatedData = replaceExact(displayRecord(parsed.data, nextName), oldRel, newRel);
+  const content = replaceFrontmatter(markdown, updatedData);
+  const diagnostics = [];
+  const noteStale = (file, text, fromRel) => {
+    for (const inside of staleProseLinks(text, fromRel, oldRel, newRel)) {
+      diagnostics.push(finding({
+        code: "STALE_PROSE_LINK",
+        severity: "warning",
+        message: `${file}: prose link (${inside}) still points at ${oldRel}`,
+        recordIds: [id],
+        evidence: "candidate",
+        action: "Update the manuscript link by hand if it should follow the renamed file. Rename does not rewrite prose."
+      }));
+    }
+  };
+  noteStale(newRel, content, newRel);
   const writes = [];
   const hash = sha256Hex(original);
   if (newRel === oldRel) {
@@ -22435,51 +22731,33 @@ function renameEntity2(root, id, name, options = {}) {
   for (const file of listMarkdown(root)) {
     if (file === oldRel)
       continue;
-    const raw = fs11.readFileSync(path13.join(root, file));
+    const raw = fs11.readFileSync(path14.join(root, file));
     const text = raw.toString("utf8");
-    const updated = rewriteLinks(rewritePathFields(text, file, oldRel, newRel), file, oldRel, newRel);
+    const updated = rewritePathFields(text, file, oldRel, newRel);
     if (updated !== text)
       writes.push({ path: file, action: "replace", expectedHash: sha256Hex(raw), content: updated });
+    noteStale(file, text, file);
   }
   try {
     const recorded = commit(root, writes, options.dryRun === true);
     return {
       envelope: envelope({
         command,
-        ok: true,
+        ok: diagnostics.every((item) => item.severity !== "error"),
         data: { id, type: entry.type, name: nextName, path: newRel, dryRun: options.dryRun === true },
+        diagnostics,
         writes: recorded
       }),
-      exitCode: 0,
+      exitCode: diagnostics.some((item) => item.severity === "error") ? 1 : 0,
       text: options.dryRun === true ? "" : `Renamed ${id} to ${nextName}: ${newRel}
-`
+`,
+      log: diagnostics.length > 0 ? `${diagnostics.map((item) => item.message).join(`
+`)}
+` : undefined
     };
   } catch (error) {
     return fromStorageError(command, error);
   }
-}
-function classifyReferences(project, id) {
-  const required = [];
-  const optional = [];
-  for (const entry of project.records.values()) {
-    if (entry.id === id)
-      continue;
-    const record = entry.record;
-    if (record.type === "fact") {
-      const fields = [];
-      if (record.subject === id)
-        fields.push("subject");
-      if (record.value === id)
-        fields.push("value");
-      if (fields.length > 0)
-        required.push({ entry, fields, kind: "fact" });
-    }
-    if (record["chapter-id"] === id)
-      required.push({ entry, fields: ["chapter-id"], kind: "schema" });
-    if (Array.isArray(record.cast) && record.cast.includes(id))
-      optional.push(entry);
-  }
-  return { required, optional };
 }
 function referenceFinding(code, message, recordIds, action2, severity = "error") {
   return finding({
@@ -22491,6 +22769,28 @@ function referenceFinding(code, message, recordIds, action2, severity = "error")
     action: action2
   });
 }
+function dependencyDiagnostics(id, classified, policy) {
+  if (policy === "detach") {
+    return classified.required.map((item) => referenceFinding("REQUIRED_REFERENCE", item.kind === "fact" ? `Cannot detach ${id}: ${item.entry.id} ${item.fields.join(" and ")} is a required unresolved fact reference` : `Cannot detach ${id}: ${item.entry.id} ${item.fields.join(" and ")} is a required reference`, [id, item.entry.id], item.kind === "fact" ? "Resolve the fact with an explicit reconciliation proposal before removing this entity." : "Reassign or remove the referencing record before deleting this one. Manuscript prose is not rewritten."));
+  }
+  return [
+    ...classified.required.map((item) => referenceFinding("REFERENCE_PRESENT", `Refusing to remove ${id}: ${item.entry.id} ${item.fields.join(" and ")} depends on it`, [id, item.entry.id], "Use --policy detach for optional structural references, or reconcile required references first.")),
+    ...classified.optional.map((item) => referenceFinding("REFERENCE_PRESENT", `Refusing to remove ${id}: ${item.entry.id} ${item.fields.join(" and ")} depends on it`, [id, item.entry.id], "Use --policy detach to clear optional cast or chronology.after references."))
+  ];
+}
+function withoutReference(data, id, fields) {
+  const next = { ...data };
+  if (fields.includes("cast") && Array.isArray(next.cast)) {
+    next.cast = next.cast.filter((value) => value !== id);
+  }
+  if (fields.includes("after") && next.chronology && Array.isArray(next.chronology.after)) {
+    next.chronology = {
+      ...next.chronology,
+      after: next.chronology.after.filter((value) => value !== id)
+    };
+  }
+  return next;
+}
 function removeEntity2(root, id, options = {}) {
   const command = "entity remove";
   const policy = options.policy;
@@ -22500,16 +22800,17 @@ function removeEntity2(root, id, options = {}) {
   const opened = openProject(root, command);
   if (opened.error)
     return opened.error;
+  const blocked = loadErrorResult(command, opened.project, id);
+  if (blocked)
+    return blocked;
   const entry = opened.project.records.get(id);
   if (!entry || !ENTITY_DIRECTORY[entry.type]) {
     return failure(command, `No entity with id ${id}`, "ENTITY_NOT_FOUND", 1, [id]);
   }
-  const { required, optional } = classifyReferences(opened.project, id);
+  const classified = classifyReferences(opened.project, id);
+  const { required, optional } = classified;
   if (policy === "refuse" && (required.length > 0 || optional.length > 0)) {
-    const diagnostics2 = [
-      ...required.map((item) => referenceFinding("REFERENCE_PRESENT", `Refusing to remove ${id}: ${item.entry.id} ${item.fields.join(" and ")} depends on it`, [id, item.entry.id], "Use --policy detach for optional structural references, or reconcile required references first.")),
-      ...optional.map((item) => referenceFinding("REFERENCE_PRESENT", `Refusing to remove ${id}: ${item.id} cast depends on it`, [id, item.id], "Use --policy detach to clear optional cast references."))
-    ];
+    const diagnostics2 = dependencyDiagnostics(id, classified, "refuse");
     return {
       envelope: envelope({ command, ok: false, data: { id, policy }, diagnostics: diagnostics2 }),
       exitCode: 1,
@@ -22519,10 +22820,10 @@ function removeEntity2(root, id, options = {}) {
     };
   }
   if (policy === "detach" && required.length > 0) {
-    const diagnostics2 = required.map((item) => referenceFinding("REQUIRED_REFERENCE", item.kind === "fact" ? `Cannot detach ${id}: ${item.entry.id} ${item.fields.join(" and ")} is a required unresolved fact reference` : `Cannot detach ${id}: ${item.entry.id} chapter-id is required for a schema-valid scene`, [id, item.entry.id], item.kind === "fact" ? "Resolve the fact with an explicit reconciliation proposal before removing this entity." : "Reassign or remove the scene before deleting this record."));
+    const diagnostics2 = dependencyDiagnostics(id, classified, "detach");
     return {
       envelope: envelope({ command, ok: false, data: { id, policy }, diagnostics: diagnostics2 }),
-      exitCode: 3,
+      exitCode: 1,
       text: `${diagnostics2.map((item) => item.message).join(`
 `)}
 `
@@ -22531,17 +22832,16 @@ function removeEntity2(root, id, options = {}) {
   const writes = [];
   const detached = [];
   for (const item of optional) {
-    const absolute = path13.join(root, item.path);
+    const absolute = path14.join(root, item.entry.path);
     const raw = fs11.readFileSync(absolute);
     const markdown = raw.toString("utf8");
-    const parsed = parseFrontmatter(markdown, item.path);
-    const cast = parsed.data.cast.filter((value) => value !== id);
-    const content = replaceFrontmatter(markdown, { ...parsed.data, cast });
-    writes.push({ path: slash(item.path), action: "replace", expectedHash: sha256Hex(raw), content });
-    detached.push({ recordId: item.id, field: "cast" });
+    const parsed = parseFrontmatter(markdown, item.entry.path);
+    const content = replaceFrontmatter(markdown, withoutReference(parsed.data, id, item.fields));
+    writes.push({ path: slash2(item.entry.path), action: "replace", expectedHash: sha256Hex(raw), content });
+    detached.push({ recordId: item.entry.id, field: item.fields.join(" and ") });
   }
-  const entityBytes = fs11.readFileSync(path13.join(root, entry.path));
-  writes.push({ path: slash(entry.path), action: "remove", expectedHash: sha256Hex(entityBytes) });
+  const entityBytes = fs11.readFileSync(path14.join(root, entry.path));
+  writes.push({ path: slash2(entry.path), action: "remove", expectedHash: sha256Hex(entityBytes) });
   const diagnostics = detached.map((item) => referenceFinding("REFERENCE_DETACHED", `Detached ${item.field} reference to ${id} from ${item.recordId}`, [id, item.recordId], "Review the detached record. Prose and facts were not rewritten.", "warning"));
   try {
     const recorded = commit(root, writes, options.dryRun === true);
@@ -22549,12 +22849,12 @@ function removeEntity2(root, id, options = {}) {
       envelope: envelope({
         command,
         ok: true,
-        data: { id, type: entry.type, path: slash(entry.path), policy, detached, dryRun: options.dryRun === true },
+        data: { id, type: entry.type, path: slash2(entry.path), policy, detached, dryRun: options.dryRun === true },
         diagnostics,
         writes: recorded
       }),
       exitCode: 0,
-      text: options.dryRun === true ? "" : `Removed ${entry.type} ${id}: ${slash(entry.path)}
+      text: options.dryRun === true ? "" : `Removed ${entry.type} ${id}: ${slash2(entry.path)}
 `,
       log: diagnostics.length > 0 ? `${diagnostics.map((item) => item.message).join(`
 `)}
@@ -22580,10 +22880,10 @@ function showEntity(root, id) {
     envelope: envelope({
       command,
       ok: true,
-      data: { id: entry.id, type: entry.type, name, path: slash(entry.path) }
+      data: { id: entry.id, type: entry.type, name, path: slash2(entry.path) }
     }),
     exitCode: 0,
-    text: `${entry.type} ${entry.id} ${name} ${slash(entry.path)}
+    text: `${entry.type} ${entry.id} ${name} ${slash2(entry.path)}
 `
   };
 }
@@ -22766,7 +23066,7 @@ var COMMAND_LIST = [
       io.stdout.write(`Created story project: ${result.root}
 `);
       for (const linkedBook of result.linkedBooks) {
-        io.stdout.write(`Linked series backlink in ${path14.join(linkedBook, "story.md")}
+        io.stdout.write(`Linked series backlink in ${path15.join(linkedBook, "story.md")}
 `);
       }
       return 0;
@@ -23074,7 +23374,7 @@ var COMMAND_LIST = [
     run({ parsed, io, root }) {
       const result = buildBook(root(), {
         out: parsed.options.out,
-        format: parsed.options.format,
+        format: buildKind(parsed.options.format),
         shunn: isTruthy(parsed.options.shunn)
       });
       io.stdout.write(`Built ${result.chapters} chapters as ${result.format} to ${result.outFile}
@@ -23115,7 +23415,7 @@ var COMMAND_LIST = [
     optionSchema: [
       { name: "project" },
       { name: "path" },
-      { name: "json" },
+      { name: "format", values: ["text", "json"] },
       { name: "dry-run" },
       { name: "chapter" }
     ],
@@ -23139,7 +23439,7 @@ var COMMAND_LIST = [
     optionSchema: [
       { name: "project" },
       { name: "path" },
-      { name: "json" },
+      { name: "format", values: ["text", "json"] },
       { name: "dry-run" }
     ],
     examples: ["story entity rename chr_ada Adaline"],
@@ -23159,7 +23459,7 @@ var COMMAND_LIST = [
     optionSchema: [
       { name: "project" },
       { name: "path" },
-      { name: "json" },
+      { name: "format", values: ["text", "json"] },
       { name: "dry-run" },
       { name: "policy", required: true, values: ["refuse", "detach"] }
     ],
@@ -23180,13 +23480,19 @@ var COMMAND_LIST = [
     optionSchema: [
       { name: "project" },
       { name: "path" },
-      { name: "json" }
+      { name: "format", values: ["text", "json"] }
     ],
     examples: ["story entity show chr_ada"],
     run: showEntityCommand
   }
 ];
 var COMMANDS = defineCommands(COMMAND_LIST);
+function buildKind(value) {
+  const format = Array.isArray(value) ? value[value.length - 1] : value;
+  if (format === "text" || format === "json")
+    return;
+  return format;
+}
 function collectThemes(options) {
   return [].concat(options.theme ?? []).concat(options.themes ?? []).filter((value) => value !== undefined && value !== true);
 }
@@ -23213,6 +23519,14 @@ function reportResult(io, result, successMessage, failureMessage) {
 var VERSION = "1.0.0-rc.0";
 
 // src/cli/dispatch.js
+var INVOCATION_PREFIXES = [
+  "Missing value",
+  "Unknown option",
+  "Unknown value",
+  "Conflicting project paths",
+  "A story title is required",
+  "Cannot derive"
+];
 var COMMAND_COLUMN = 21;
 var HELP = [
   "Usage: story <command> [options]",
@@ -23260,29 +23574,34 @@ function resolveRoot(cwd, parsed, name) {
   const command = commandFor(parsed, name);
   const projectFlag = lastOptionValue(parsed.options.project);
   const pathFlag = lastOptionValue(parsed.options.path);
-  if (projectFlag !== undefined && pathFlag !== undefined && path15.resolve(cwd, String(projectFlag)) !== path15.resolve(cwd, String(pathFlag))) {
+  if (projectFlag !== undefined && pathFlag !== undefined && path16.resolve(cwd, String(projectFlag)) !== path16.resolve(cwd, String(pathFlag))) {
     throw new Error(`Conflicting project paths: --project ${projectFlag} and --path ${pathFlag}. Use one of --project or --path.`);
   }
   const flagPath = projectFlag ?? pathFlag;
   const flagLabel = projectFlag !== undefined ? "--project" : "--path";
+  if (command?.project === "discover") {
+    if (flagPath !== undefined)
+      return path16.resolve(cwd, String(flagPath));
+    return discoverProject(cwd) ?? path16.resolve(cwd, ".");
+  }
   if (command?.project !== "positional") {
     if (flagPath !== undefined)
-      return path15.resolve(cwd, String(flagPath));
-    return discoverProject(cwd) ?? path15.resolve(cwd, ".");
+      return path16.resolve(cwd, String(flagPath));
+    return path16.resolve(cwd, ".");
   }
   const positionalPath = command.path.length === 1 ? parsed.positionals[1] : undefined;
   if (positionalPath !== undefined && flagPath !== undefined) {
-    const resolvedPositional = path15.resolve(cwd, positionalPath);
-    const resolvedFlag = path15.resolve(cwd, String(flagPath));
+    const resolvedPositional = path16.resolve(cwd, positionalPath);
+    const resolvedFlag = path16.resolve(cwd, String(flagPath));
     if (resolvedPositional !== resolvedFlag) {
       throw new Error(`Conflicting project paths: ${positionalPath} and ${flagLabel} ${flagPath}. Use either a positional path or ${flagLabel}, not both.`);
     }
     return resolvedFlag;
   }
   if (flagPath !== undefined || positionalPath !== undefined) {
-    return path15.resolve(cwd, String(flagPath ?? positionalPath));
+    return path16.resolve(cwd, String(flagPath ?? positionalPath));
   }
-  return discoverProject(cwd) ?? path15.resolve(cwd, ".");
+  return path16.resolve(cwd, ".");
 }
 function captureIo(cwd) {
   const out = [];
@@ -23316,11 +23635,11 @@ function rejectProjectFlag(io, json, name, flag) {
     io.stdout.write(JSON.stringify(invocationEnvelope(name, message)));
     io.stderr.write(`${message}
 `);
-    return 2;
-  }
-  io.stderr.write(`${message}
+  } else {
+    io.stderr.write(`${message}
 `);
-  return 1;
+  }
+  return 2;
 }
 function rejectInvocation(io, json, command, message, code = 2) {
   if (json) {
@@ -23339,7 +23658,7 @@ function runCli(argv, io) {
   let commandName = "";
   try {
     const parsed = parseArgs(argv);
-    json = isTruthy(parsed.options.json);
+    json = lastOptionValue(parsed.options.format) === "json";
     const cwd = io.cwd ?? process.cwd();
     commandName = parsed.positionals[0] ?? "";
     if (parsed.options.version) {
@@ -23369,7 +23688,7 @@ ${group.map((entry) => `  story ${entry.usage}`).join(`
       io.stderr.write(`Unknown command: ${commandName}
 
 ${HELP}`);
-      return 1;
+      return 2;
     }
     if (command.project === "none" && parsed.options.path !== undefined) {
       return rejectProjectFlag(io, json, command.name, "path");
@@ -23417,21 +23736,42 @@ ${HELP}`);
     }
     return outcome;
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const classified = classifyThrown(error);
     if (!json)
       json = argvRequestsJson(argv);
     if (!commandName)
       commandName = commandToken(argv);
     if (json) {
-      io.stdout.write(JSON.stringify(invocationEnvelope(commandName, message)));
-      io.stderr.write(`${message}
-`);
-      return 2;
+      io.stdout.write(JSON.stringify(envelope({
+        command: commandName,
+        ok: false,
+        diagnostics: [finding({
+          code: classified.code,
+          message: classified.message,
+          action: classified.code === "INVALID_INVOCATION" ? "Fix the command arguments and try again." : "Fix the reported error and run the command again."
+        })]
+      })));
     }
-    io.stderr.write(`${message}
+    io.stderr.write(`${classified.message}
 `);
-    return 1;
+    return classified.exitCode;
   }
+}
+function classifyThrown(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (error instanceof StorageError) {
+    if (error.code === "STALE_SOURCE" || error.code === "LOCKED") {
+      return { exitCode: 3, code: error.code, message };
+    }
+    return { exitCode: 4, code: error.code || "OPERATION_FAILED", message };
+  }
+  if (error && (error.code === "EACCES" || error.code === "EPERM")) {
+    return { exitCode: 4, code: "OPERATION_FAILED", message };
+  }
+  if (INVOCATION_PREFIXES.some((prefix) => message.startsWith(prefix))) {
+    return { exitCode: 2, code: "INVALID_INVOCATION", message };
+  }
+  return { exitCode: 1, code: "COMMAND_FAILED", message };
 }
 // bin/story.js
 process.exitCode = runCli(process.argv.slice(2), {

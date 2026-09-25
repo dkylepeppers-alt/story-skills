@@ -81,6 +81,40 @@ export function checkCoverage(lcovText, absoluteSourceFiles) {
   return { failures, filesWithBranches, filesChecked: absoluteSourceFiles.length };
 }
 
+export function listSourceFiles(sourceDir) {
+  const files = [];
+  const walk = (directory) => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      if (entry.name === "node_modules") continue;
+      const full = path.join(directory, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.isFile() && entry.name.endsWith(".js")) files.push(path.resolve(full));
+    }
+  };
+  walk(sourceDir);
+  return files.sort();
+}
+
+export function directoryCoverage(records, sourceDir, files) {
+  const groups = new Map();
+  for (const filePath of files) {
+    const relative = path.relative(sourceDir, path.resolve(filePath));
+    const dir = path.dirname(relative);
+    const key = dir === "." ? "." : dir.split(path.sep).join("/");
+    if (!groups.has(key)) {
+      groups.set(key, { lines: { hit: 0, found: 0 }, functions: { hit: 0, found: 0 } });
+    }
+    const group = groups.get(key);
+    const record = records.get(path.resolve(filePath));
+    if (!record) continue;
+    group.lines.hit += record.lines.hit;
+    group.lines.found += record.lines.found;
+    group.functions.hit += record.functions.hit;
+    group.functions.found += record.functions.found;
+  }
+  return [...groups.entries()].sort((left, right) => left[0].localeCompare(right[0]));
+}
+
 function main(argv) {
   const [lcovPath, sourceDir] = argv;
   if (!lcovPath || !sourceDir) {
@@ -89,9 +123,11 @@ function main(argv) {
   }
 
   const lcov = fs.readFileSync(lcovPath, "utf8");
-  const requiredFiles = fs.readdirSync(sourceDir)
-    .filter((file) => file.endsWith(".js"))
-    .map((file) => path.resolve(sourceDir, file));
+  const requiredFiles = listSourceFiles(sourceDir);
+  const records = parseLcov(lcov);
+  for (const [dir, totals] of directoryCoverage(records, sourceDir, requiredFiles)) {
+    console.log(`${dir} lines ${totals.lines.hit}/${totals.lines.found} functions ${totals.functions.hit}/${totals.functions.found}`);
+  }
   const { failures, filesWithBranches } = checkCoverage(lcov, requiredFiles);
 
   if (failures.length > 0) {

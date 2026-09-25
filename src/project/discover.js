@@ -10,16 +10,18 @@ export function discoverProject(start) {
   if (typeof start !== "string" || start.trim() === "") return null;
   let current = path.resolve(start);
   const filesystemRoot = path.parse(current).root;
-  while (true) {
-    const candidate = path.join(current, "story.md");
-    try {
-      if (fs.statSync(candidate).isFile()) return current;
-    } catch {
-      // Missing or unreadable. Keep walking; the caller reports a miss.
-    }
-    if (current === filesystemRoot) return null;
-    const parent = path.dirname(current);
-    if (parent === current) return null;
-    current = parent;
+  while (current !== filesystemRoot) {
+    if (hasStory(current)) return current;
+    current = path.dirname(current);
+  }
+  return hasStory(current) ? current : null;
+}
+
+function hasStory(directory) {
+  try {
+    return fs.statSync(path.join(directory, "story.md")).isFile();
+  } catch {
+    // Missing or unreadable. Keep walking; the caller reports a miss.
+    return false;
   }
 }

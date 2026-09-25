@@ -99,15 +99,15 @@ export function writeTransactionSync(root, writes, options = {}) {
       }
     } catch (error) {
       const conflicts = rollbackApplied(root, applied);
+      let failure = error;
       if (conflicts.length > 0) {
-        throw new StorageError("ROLLBACK_CONFLICT", `Transaction ${transactionId} could not be fully rolled back; external edits were preserved. Inspect its journal before repair.`, {
+        failure = new StorageError("ROLLBACK_CONFLICT", `Transaction ${transactionId} could not be fully rolled back; external edits were preserved. Inspect its journal before repair.`, {
           transactionId, cause: error.code ?? "OPERATION_FAILED", conflicts
         });
+      } else if (!(error instanceof StorageError)) {
+        failure = new StorageError("OPERATION_FAILED", `Transaction ${transactionId} failed: ${error.message}`);
       }
-      if (error instanceof StorageError) {
-        throw error;
-      }
-      throw new StorageError("OPERATION_FAILED", `Transaction ${transactionId} failed: ${error.message}`);
+      throw failure;
     }
 
     try {

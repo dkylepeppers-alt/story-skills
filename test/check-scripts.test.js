@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { checkCoverage, parseLcov } from "../scripts/check-coverage.js";
+import { checkCoverage, directoryCoverage, listSourceFiles, parseLcov } from "../scripts/check-coverage.js";
 import { collectResult, compareFindings } from "../scripts/check-examples.js";
 import { checkMarketplaces, checkSkillFrontmatter, checkTemplateStoryRef, checkVersionModule, expectEqual } from "../scripts/check-metadata.js";
 import { checkFixtureSkill } from "../scripts/check-evals.js";
@@ -109,6 +109,19 @@ describe("check-coverage", () => {
     const file = path.join(repoRoot, "src", "a.js");
     const result = checkCoverage(lcovRecord(file), [file]);
     expect(result).toEqual({ failures: [], filesWithBranches: 0, filesChecked: 1 });
+  });
+
+  test("lists nested source files and summarizes coverage by directory", () => {
+    const files = listSourceFiles(path.join(repoRoot, "src"));
+    expect(files.some((file) => file.endsWith(path.join("src", "project", "load.js")))).toBe(true);
+    expect(files.some((file) => file.endsWith(path.join("src", "cli.js")))).toBe(true);
+    const nested = path.join(repoRoot, "src", "project", "load.js");
+    const top = path.join(repoRoot, "src", "cli.js");
+    const lcov = `${lcovRecord(nested)}${lcovRecord(top, { lines: [4, 2], functions: [1, 1] })}`;
+    expect(directoryCoverage(parseLcov(lcov), path.join(repoRoot, "src"), [nested, top])).toEqual([
+      [".", { lines: { hit: 2, found: 4 }, functions: { hit: 1, found: 1 } }],
+      ["project", { lines: { hit: 10, found: 10 }, functions: { hit: 2, found: 2 } }]
+    ]);
   });
 
   test("still gates lines, functions, and missing records", () => {
