@@ -14135,12 +14135,12 @@ var OPTIONS = [
   { name: "format", value: "<name>", help: ["Result text or json; build kind markdown,", "epub, docx, or shunn"] },
   { name: "shunn", help: ["Apply Shunn manuscript formatting (with --format", "docx)"] },
   { name: "at", value: "<chapter-id>", help: ["Chapter id for schema v2 knowledge"] },
-  { name: "data", value: "<json-file>", help: ["Schema-validated record data for fact and", "decision mutations"] },
+  { name: "data", value: "<json-file>", help: ["Schema-validated record data for fact,", "decision, and issue mutations"] },
   { name: "beat", value: "<id>", help: ["Beat id inside --scene for knowledge and fact list"] },
   { name: "side", value: "<before|after>", help: ["Cursor side for --scene or --beat (default before)"] },
-  { name: "include-inactive", help: ["fact list: add proposed, superseded, and", "retracted facts; decision list: add rejected", "and superseded decisions"] },
+  { name: "include-inactive", help: ["fact list: add proposed, superseded, and", "retracted facts; decision list: add rejected", "and superseded; issue list: add resolved and", "dismissed"] },
   { name: "include-work", help: ["fact list: include fact records under work/"] },
-  { name: "record", value: "<id>", help: ["decision list: decisions scoped to this record", "or to the whole project"] },
+  { name: "record", value: "<id>", help: ["decision list: scoped to this record or the", "whole project; issue list: affecting this record"] },
   { name: "pages", value: "<n>", help: ["Synopsis length for synopsis (1 or 3)"] },
   { name: "actionable", help: ["Include next actions in report"] },
   { name: "number", value: "<n>", help: ["Chapter number for add chapter"] },
@@ -14304,10 +14304,10 @@ function parseArgs(argv) {
   return { positionals, options };
 }
 // src/cli/dispatch.js
-import path21 from "node:path";
+import path22 from "node:path";
 
 // src/commands.js
-import path20 from "node:path";
+import path21 from "node:path";
 
 // src/compare.js
 function compareChapters(previous, current) {
@@ -14932,6 +14932,9 @@ var ACTIONS = {
   RECORD_NOT_FOUND: "Check the id with story entity show.",
   DECISION_NOT_FOUND: "Check the id with story decision list --include-inactive.",
   DECISION_TRANSITION_INVALID: "Only proposed or accepted decisions can be superseded.",
+  ISSUE_NOT_FOUND: "Check the id with story issue list --include-inactive.",
+  ISSUE_TRANSITION_INVALID: "Only an open issue, or a dismissal reopened by changed evidence, can be resolved or dismissed.",
+  ISSUE_DISMISSAL_UNBOUND: "List the affected ids and evidence on the issue so the dismissal can be matched exactly.",
   COMMAND_FAILED: "Fix the reported error and run the command again."
 };
 function failure(command, message, code, exitCode, recordIds = [], evidence = "structural") {
@@ -24564,18 +24567,364 @@ function retractFactCommand(ctx) {
   }));
 }
 
+// src/memory/issues.js
+import fs17 from "node:fs";
+import path19 from "node:path";
+var byId2 = (left, right) => left.id.localeCompare(right.id, "en");
+function list2(value) {
+  return Array.isArray(value) ? value.filter((item) => typeof item === "string") : [];
+}
+function evidenceList(record) {
+  return Array.isArray(record.evidence) ? record.evidence.filter((item) => item && typeof item === "object" && typeof item.path === "string") : [];
+}
+function issueEntries(project) {
+  return [...project.records.values()].filter((entry) => entry.type === "issue").sort(byId2);
+}
+function currentHash(root, ref) {
+  try {
+    return sourceHash(root, { path: ref.path, sceneId: ref.scene, beatId: ref.beat });
+  } catch {
+    return null;
+  }
+}
+function changedEvidence(root, record) {
+  const changed = [];
+  for (const ref of evidenceList(record)) {
+    const current = currentHash(root, ref);
+    if (current === ref.hash)
+      continue;
+    const item = { path: ref.path };
+    if (ref.scene !== undefined)
+      item.scene = ref.scene;
+    if (ref.beat !== undefined)
+      item.beat = ref.beat;
+    item.recorded = ref.hash;
+    item.current = current;
+    changed.push(item);
+  }
+  return changed;
+}
+function unboundReason(record) {
+  const dismissal = record.dismissal;
+  if (!dismissal || typeof dismissal !== "object")
+    return "has no dismissal record";
+  if (typeof dismissal.code !== "string" || dismissal.code === "")
+    return "does not name an exact diagnostic code";
+  const affected = list2(record["affected-ids"]);
+  if (affected.length === 0)
+    return "has no affected ids";
+  if (evidenceList(record).length === 0)
+    return "has no evidence fingerprints";
+  const recordId = dismissal["record-id"];
+  if (recordId !== undefined && !affected.includes(recordId))
+    return `names record ${recordId}, which is not an affected id`;
+  return null;
+}
+function refreshIssueEvidence(project) {
+  return issueEntries(project).map((entry) => {
+    const record = entry.record;
+    const changed = changedEvidence(project.root, record);
+    const reopen = record.status === "dismissed" && changed.length > 0;
+    return {
+      id: entry.id,
+      status: reopen ? "open" : record.status,
+      storedStatus: record.status,
+      category: record.category,
+      severity: record.severity,
+      affectedIds: list2(record["affected-ids"]),
+      evidence: evidenceList(record),
+      dismissal: record.dismissal ?? null,
+      changedEvidence: changed,
+      reopened: reopen ? { from: "dismissed", dismissal: record.dismissal ?? null } : null,
+      bound: record.status !== "dismissed" || unboundReason(record) === null,
+      path: entry.path.split("\\").join("/")
+    };
+  });
+}
+function describeDismissal(dismissal) {
+  if (!dismissal)
+    return "was dismissed";
+  const code = typeof dismissal.code === "string" && dismissal.code !== "" ? ` (${dismissal.code})` : "";
+  return `was dismissed${code}: ${dismissal.reason}`;
+}
+function issueFindings(project, issues = refreshIssueEvidence(project)) {
+  const findings = [];
+  const entries = new Map(issueEntries(project).map((entry) => [entry.id, entry]));
+  for (const issue3 of issues) {
+    if (issue3.reopened) {
+      const paths = issue3.changedEvidence.map((item) => item.path).join(", ");
+      findings.push(finding({
+        code: "ISSUE_REOPENED",
+        severity: "warning",
+        message: `${issue3.path}: evidence changed in ${paths}, so ${issue3.id} is open for review. It ${describeDismissal(issue3.reopened.dismissal)}`,
+        recordIds: [issue3.id, ...issue3.affectedIds],
+        sources: issue3.evidence,
+        evidence: "source",
+        action: "Inspect the changed evidence, then resolve the issue or dismiss it again against the current text."
+      }));
+      continue;
+    }
+    if (issue3.storedStatus !== "dismissed")
+      continue;
+    const reason = unboundReason(entries.get(issue3.id).record);
+    if (reason === null)
+      continue;
+    findings.push(finding({
+      code: "ISSUE_DISMISSAL_UNBOUND",
+      message: `${issue3.path}: dismissed issue ${issue3.id} ${reason}, so it cannot dismiss any finding`,
+      recordIds: [issue3.id],
+      action: "Give the dismissal an exact diagnostic code, list the affected ids, and record the evidence it was judged against."
+    }));
+  }
+  return findings;
+}
+var HISTORY_HEADING = /^## History[ \t]*$/m;
+var DISMISSAL_KEYS = new Set(["code", "record-id", "reason"]);
+function appendHistory(body, lines) {
+  const base = body.replace(/\s*$/, "");
+  const entries = lines.map((line) => `- ${line}
+`).join("");
+  if (HISTORY_HEADING.test(base))
+    return `${base}
+${entries}`;
+  return `${base === "" ? `
+` : `${base}
+
+`}## History
+
+${entries}`;
+}
+function summarizeIssue(issue3) {
+  const { bound, ...rest } = issue3;
+  return rest;
+}
+function describeIssue(issue3) {
+  const affects = issue3.affectedIds.length === 0 ? "" : ` affects ${issue3.affectedIds.join(", ")}`;
+  let line = `- ${issue3.id} [${issue3.status} ${issue3.severity} ${issue3.category}]${affects}`;
+  if (issue3.reopened)
+    line += ` (reopened; ${describeDismissal(issue3.reopened.dismissal)})`;
+  else if (issue3.status === "dismissed" && issue3.dismissal)
+    line += ` (${describeDismissal(issue3.dismissal)})`;
+  return line;
+}
+function addIssue(root, options = {}) {
+  const command = "issue add";
+  if (options.dataPath === undefined)
+    return invalid(command, "Usage: story issue add --data <json-file>");
+  const opened = openProject(root, command);
+  if (opened.error)
+    return opened.error;
+  const { project } = opened;
+  const blocked = loadErrorResult(command, project);
+  if (blocked)
+    return blocked;
+  const read = readData(command, options.cwd ?? process.cwd(), options.dataPath);
+  if (read.error)
+    return read.error;
+  const record = { format: FORMAT, "schema-version": SCHEMA_VERSION, id: read.data.id, type: "issue", status: "open", ...read.data };
+  if (record.type !== "issue")
+    return invalid(command, "issue add creates records of type issue");
+  if (record.id === undefined)
+    record.id = allocateId("issue", new Set(project.records.keys()));
+  if (typeof record.id !== "string" || !ID_PATTERN.test(record.id))
+    return invalid(command, `Invalid id: ${record.id}`);
+  if (project.records.has(record.id)) {
+    return failure(command, `Record id ${record.id} is already used`, "DUPLICATE_RECORD_ID", 1, [record.id]);
+  }
+  if (record.status !== "open")
+    return invalid(command, "A new issue is open; use issue resolve or issue dismiss to close it");
+  if (record.dismissal !== undefined)
+    return invalid(command, "Use story issue dismiss <id> to dismiss an issue");
+  const unreadable = hashRefs(command, root, record, "evidence");
+  if (unreadable)
+    return unreadable;
+  const schema = validateRecord(record);
+  if (schema.length > 0)
+    return findingsResult(command, schema, 2);
+  const relative3 = `issues/${uniqueFilename(record.id, record.id, takenNames(root, "issues"))}`;
+  const entry = { id: record.id, type: "issue", path: relative3, record, body: "", valid: true };
+  const withIssue = { records: new Map([...project.records, [record.id, entry]]), unindexed: project.unindexed };
+  const dangling = danglingReferenceDiagnostics(withIssue).filter((item) => item.recordIds[1] === record.id);
+  if (dangling.length > 0)
+    return findingsResult(command, dangling, 1);
+  const content = `${stringifyFrontmatter(record)}## History
+
+- opened
+`;
+  const [summary] = refreshIssueEvidence({ root, records: new Map([[record.id, entry]]) });
+  return writeResult(command, root, [{ path: relative3, action: "create", expectedHash: null, content }], options, {
+    data: summarizeIssue(summary),
+    text: `Added issue ${record.id}: ${relative3}
+`
+  });
+}
+function listIssues(root, options = {}) {
+  const command = "issue list";
+  const opened = openProject(root, command);
+  if (opened.error)
+    return opened.error;
+  const { project } = opened;
+  const record = options.record ?? null;
+  if (record !== null && !project.records.has(record)) {
+    return failure(command, `No record with id ${record}`, "RECORD_NOT_FOUND", 1, [record]);
+  }
+  const all = refreshIssueEvidence(project);
+  const diagnostics = issueFindings(project, all);
+  const issues = all.filter((item) => options.includeInactive === true || item.status === "open").filter((item) => record === null || item.affectedIds.includes(record)).map(summarizeIssue);
+  const ok = !diagnostics.some((item) => item.severity === "error");
+  const lines = [record === null ? "Issues:" : `Issues affecting ${record}:`];
+  if (issues.length === 0)
+    lines.push("- None");
+  for (const item of issues)
+    lines.push(describeIssue(item));
+  if (diagnostics.length > 0) {
+    lines.push("", "Diagnostics:");
+    for (const item of diagnostics)
+      lines.push(`- ${item.severity} ${item.code}: ${item.message}`);
+  }
+  return {
+    envelope: envelope({ command, ok, data: { record, issues }, diagnostics }),
+    exitCode: ok ? 0 : 1,
+    text: `${lines.join(`
+`)}
+`
+  };
+}
+function openIssue(command, root, id) {
+  const opened = openProject(root, command);
+  if (opened.error)
+    return { error: opened.error };
+  const { project } = opened;
+  const blocked = loadErrorResult(command, project);
+  if (blocked)
+    return { error: blocked };
+  const entry = project.records.get(id);
+  if (!entry || entry.type !== "issue") {
+    return { error: failure(command, `No issue with id ${id}`, "ISSUE_NOT_FOUND", 1, [id]) };
+  }
+  const [issue3] = refreshIssueEvidence({ root: project.root, records: new Map([[id, entry]]) });
+  if (issue3.status !== "open") {
+    return { error: failure(command, `Issue ${id} is ${issue3.status}; only an open issue can be resolved or dismissed`, "ISSUE_TRANSITION_INVALID", 1, [id]) };
+  }
+  return { project, entry, issue: issue3 };
+}
+function reopenedLine(issue3) {
+  const paths = issue3.changedEvidence.map((item) => item.path).join(", ");
+  return `reopened: evidence changed in ${paths}; it ${describeDismissal(issue3.reopened.dismissal)}`;
+}
+function transition(command, root, target, data, history, options, verb) {
+  const { entry, issue: issue3 } = target;
+  const markdown = fs17.readFileSync(path19.join(root, entry.path), "utf8");
+  const parsed = parseFrontmatter(markdown, entry.path);
+  const lines = issue3.reopened ? [reopenedLine(issue3), history] : [history];
+  const content = replaceFrontmatter(markdown, { ...parsed.data, ...data }, appendHistory(parsed.body, lines));
+  const relative3 = entry.path.split(path19.sep).join("/");
+  return writeResult(command, root, [{ path: relative3, action: "replace", expectedHash: entry.hash, content }], options, {
+    data: { id: entry.id, path: relative3, from: "open", to: data.status, reopened: issue3.reopened },
+    text: `${verb} issue ${entry.id}: ${relative3}
+`
+  });
+}
+function optionalData(command, options) {
+  if (options.dataPath === undefined)
+    return { data: {} };
+  return readData(command, options.cwd ?? process.cwd(), options.dataPath);
+}
+function resolveIssue(root, id, options = {}) {
+  const command = "issue resolve";
+  if (!id)
+    return invalid(command, "Usage: story issue resolve <id> [--data <json-file>]");
+  const target = openIssue(command, root, id);
+  if (target.error)
+    return target.error;
+  const read = optionalData(command, options);
+  if (read.error)
+    return read.error;
+  const extra = Object.keys(read.data).filter((key) => key !== "reason");
+  if (extra.length > 0)
+    return invalid(command, `issue resolve --data accepts only reason, not ${extra.join(", ")}`);
+  const reason = read.data.reason;
+  if (reason !== undefined && (typeof reason !== "string" || reason === "")) {
+    return invalid(command, "reason must be non-empty text");
+  }
+  const history = reason === undefined ? "resolved" : `resolved: ${reason}`;
+  return transition(command, root, target, { status: "resolved", dismissal: undefined }, history, options, "Resolved");
+}
+function dismissIssue(root, id, options = {}) {
+  const command = "issue dismiss";
+  if (!id || options.dataPath === undefined)
+    return invalid(command, "Usage: story issue dismiss <id> --data <json-file>");
+  const target = openIssue(command, root, id);
+  if (target.error)
+    return target.error;
+  const read = readData(command, options.cwd ?? process.cwd(), options.dataPath);
+  if (read.error)
+    return read.error;
+  const dismissal = read.data;
+  const extra = Object.keys(dismissal).filter((key) => !DISMISSAL_KEYS.has(key));
+  if (extra.length > 0)
+    return invalid(command, `issue dismiss --data accepts code, record-id and reason, not ${extra.join(", ")}`);
+  if (typeof dismissal.code !== "string" || dismissal.code === "")
+    return invalid(command, "A dismissal names one exact diagnostic code");
+  if (typeof dismissal.reason !== "string" || dismissal.reason === "")
+    return invalid(command, "A dismissal needs a reason");
+  if (dismissal["record-id"] !== undefined && typeof dismissal["record-id"] !== "string")
+    return invalid(command, "record-id must be a record id");
+  const record = { ...target.entry.record, status: "dismissed", dismissal };
+  const unbound = unboundReason(record);
+  if (unbound !== null) {
+    return failure(command, `Issue ${id} ${unbound}, so a dismissal could not be matched exactly`, "ISSUE_DISMISSAL_UNBOUND", 1, [id]);
+  }
+  const evidence = record.evidence.map((ref) => ({ ...ref }));
+  const fingerprinted = { id, evidence };
+  const unreadable = hashRefs(command, root, fingerprinted, "evidence", true);
+  if (unreadable)
+    return unreadable;
+  const on = dismissal["record-id"] === undefined ? "" : ` on ${dismissal["record-id"]}`;
+  const history = `dismissed (${dismissal.code}${on}): ${dismissal.reason}`;
+  return transition(command, root, target, { status: "dismissed", dismissal, evidence }, history, options, "Dismissed");
+}
+
+// src/cli/handlers/issue.js
+function optionValue4(value) {
+  return Array.isArray(value) ? value[value.length - 1] : value;
+}
+function mutation(ctx) {
+  return {
+    cwd: ctx.cwd,
+    dataPath: optionValue4(ctx.parsed.options.data),
+    dryRun: isTruthy(ctx.parsed.options["dry-run"])
+  };
+}
+function addIssueCommand(ctx) {
+  return present(ctx, addIssue(ctx.root(), mutation(ctx)));
+}
+function listIssuesCommand(ctx) {
+  const record = optionValue4(ctx.parsed.options.record);
+  return present(ctx, listIssues(ctx.root(), {
+    includeInactive: isTruthy(ctx.parsed.options["include-inactive"]),
+    record: record === undefined ? undefined : String(record)
+  }));
+}
+function resolveIssueCommand(ctx) {
+  return present(ctx, resolveIssue(ctx.root(), ctx.parsed.positionals[2], mutation(ctx)));
+}
+function dismissIssueCommand(ctx) {
+  return present(ctx, dismissIssue(ctx.root(), ctx.parsed.positionals[2], mutation(ctx)));
+}
+
 // src/state/knowledge.js
 var PROFILE_TYPES = new Set(["character", "location", "system", "faction", "object"]);
 var EPISTEMIC_KINDS = new Set(["knowledge", "belief"]);
 var CURSOR_CODES = new Set(["INVALID_CURSOR", "MISSING_SCENE", "MISSING_BEAT"]);
-var HISTORY_HEADING = /^#{1,6}\s+(?:history|backstory|biography|timeline|later life|fate|future)\b/i;
+var HISTORY_HEADING2 = /^#{1,6}\s+(?:history|backstory|biography|timeline|later life|fate|future)\b/i;
 var DATED_ENTRY = /^\s*(?:[-*+]\s+)?(?:\d{1,4}|year\s+\d+|age\s+\d+|chapter\s+\d+|book\s+\d+)\s*(?:[:\u2013\u2014]|-\s)/i;
 var LATER_PHRASE = /\b(?:years later|later in life|eventually|by the end of the (?:story|book|series)|will (?:die|become|betray|learn|lose|marry|kill|leave|discover))\b/i;
 function temporalLine(body) {
   const lines = body.split(/\r?\n/);
   for (let index = 0;index < lines.length; index += 1) {
     const line = lines[index];
-    if (HISTORY_HEADING.test(line) || DATED_ENTRY.test(line) || LATER_PHRASE.test(line)) {
+    if (HISTORY_HEADING2.test(line) || DATED_ENTRY.test(line) || LATER_PHRASE.test(line)) {
       return { number: index + 1, text: line.trim() };
     }
   }
@@ -24647,8 +24996,8 @@ function knowledgeAt(project, characterId, cursor, options = {}) {
 }
 
 // src/cli/handlers/timeline.js
-import fs17 from "node:fs";
-import path19 from "node:path";
+import fs18 from "node:fs";
+import path20 from "node:path";
 function timelineCommand(ctx) {
   if (isStoryToolkitProject(ctx.root()))
     return toolkitTimeline(ctx);
@@ -24656,7 +25005,7 @@ function timelineCommand(ctx) {
 }
 function isStoryToolkitProject(root) {
   try {
-    const raw = fs17.readFileSync(path19.join(root, "story.md"), "utf8");
+    const raw = fs18.readFileSync(path20.join(root, "story.md"), "utf8");
     return parseFrontmatter(raw, "story.md").data?.format === FORMAT;
   } catch {
     return false;
@@ -24888,20 +25237,20 @@ function legacyFailure(error) {
 }
 
 // src/cli/handlers/project.js
-function optionValue4(value) {
+function optionValue5(value) {
   return Array.isArray(value) ? value[value.length - 1] : value;
 }
 function initToolkitCommand(ctx) {
   return present(ctx, initProject({
     title: ctx.parsed.positionals.slice(1).join(" "),
     cwd: ctx.cwd,
-    dir: optionValue4(ctx.parsed.options.dir),
-    genre: optionValue4(ctx.parsed.options.genre),
-    subGenre: optionValue4(ctx.parsed.options["sub-genre"]),
-    settingEra: optionValue4(ctx.parsed.options["setting-era"]),
-    pov: optionValue4(ctx.parsed.options.pov),
-    tense: optionValue4(ctx.parsed.options.tense),
-    synopsis: optionValue4(ctx.parsed.options.synopsis),
+    dir: optionValue5(ctx.parsed.options.dir),
+    genre: optionValue5(ctx.parsed.options.genre),
+    subGenre: optionValue5(ctx.parsed.options["sub-genre"]),
+    settingEra: optionValue5(ctx.parsed.options["setting-era"]),
+    pov: optionValue5(ctx.parsed.options.pov),
+    tense: optionValue5(ctx.parsed.options.tense),
+    synopsis: optionValue5(ctx.parsed.options.synopsis),
     dryRun: isTruthy(ctx.parsed.options["dry-run"])
   }));
 }
@@ -24909,8 +25258,8 @@ function importToolkitCommand(ctx) {
   return present(ctx, importMarkdown({
     source: ctx.parsed.positionals[1],
     cwd: ctx.cwd,
-    out: optionValue4(ctx.parsed.options.out),
-    title: optionValue4(ctx.parsed.options.title),
+    out: optionValue5(ctx.parsed.options.out),
+    title: optionValue5(ctx.parsed.options.title),
     dryRun: isTruthy(ctx.parsed.options["dry-run"])
   }));
 }
@@ -25040,7 +25389,7 @@ var COMMAND_LIST = [
       io.stdout.write(`Created story project: ${result.root}
 `);
       for (const linkedBook of result.linkedBooks) {
-        io.stdout.write(`Linked series backlink in ${path20.join(linkedBook, "story.md")}
+        io.stdout.write(`Linked series backlink in ${path21.join(linkedBook, "story.md")}
 `);
       }
       return 0;
@@ -25521,7 +25870,7 @@ var COMMAND_LIST = [
     name: "decision",
     path: ["decision", "add"],
     usage: "decision add --data <json-file>",
-    summary: ["Record a scoped author decision from schema-validated data"],
+    summary: ["Record a scoped author decision from", "schema-validated data"],
     project: "discover",
     mutates: true,
     returnsResult: true,
@@ -25577,6 +25926,88 @@ var COMMAND_LIST = [
     ],
     examples: ["story decision supersede dec_tense --data successor.json"],
     run: supersedeDecisionCommand
+  },
+  {
+    name: "issue",
+    path: ["issue", "add"],
+    usage: "issue add --data <json-file>",
+    summary: ["Record an open review issue bound to its evidence"],
+    project: "discover",
+    mutates: true,
+    returnsResult: true,
+    strictOptions: true,
+    enforceArgs: true,
+    optionSchema: [
+      { name: "project" },
+      { name: "path" },
+      { name: "format", values: ["text", "json"] },
+      { name: "dry-run" },
+      { name: "data", required: true }
+    ],
+    examples: ["story issue add --data issue.json"],
+    run: addIssueCommand
+  },
+  {
+    name: "issue",
+    path: ["issue", "list"],
+    usage: "issue list",
+    summary: ["List open issues, including dismissals reopened by", "changed evidence"],
+    project: "discover",
+    mutates: false,
+    returnsResult: true,
+    strictOptions: true,
+    enforceArgs: true,
+    optionSchema: [
+      { name: "project" },
+      { name: "path" },
+      { name: "format", values: ["text", "json"] },
+      { name: "include-inactive" },
+      { name: "record" }
+    ],
+    examples: ["story issue list --record chr_ada"],
+    run: listIssuesCommand
+  },
+  {
+    name: "issue",
+    path: ["issue", "resolve"],
+    usage: "issue resolve <id>",
+    summary: ["Resolve an open issue; --data may give a reason"],
+    project: "discover",
+    mutates: true,
+    returnsResult: true,
+    strictOptions: true,
+    enforceArgs: true,
+    args: [{ name: "id", required: true }],
+    optionSchema: [
+      { name: "project" },
+      { name: "path" },
+      { name: "format", values: ["text", "json"] },
+      { name: "dry-run" },
+      { name: "data" }
+    ],
+    examples: ["story issue resolve issue_eye_colour"],
+    run: resolveIssueCommand
+  },
+  {
+    name: "issue",
+    path: ["issue", "dismiss"],
+    usage: "issue dismiss <id> --data <json-file>",
+    summary: ["Dismiss an open issue for one exact diagnostic code", "against its current evidence"],
+    project: "discover",
+    mutates: true,
+    returnsResult: true,
+    strictOptions: true,
+    enforceArgs: true,
+    args: [{ name: "id", required: true }],
+    optionSchema: [
+      { name: "project" },
+      { name: "path" },
+      { name: "format", values: ["text", "json"] },
+      { name: "dry-run" },
+      { name: "data", required: true }
+    ],
+    examples: ["story issue dismiss issue_eye_colour --data dismissal.json"],
+    run: dismissIssueCommand
   }
 ];
 var COMMANDS = defineCommands(COMMAND_LIST);
@@ -25667,34 +26098,34 @@ function resolveRoot(cwd, parsed, name) {
   const command = commandFor(parsed, name);
   const projectFlag = lastOptionValue(parsed.options.project);
   const pathFlag = lastOptionValue(parsed.options.path);
-  if (projectFlag !== undefined && pathFlag !== undefined && path21.resolve(cwd, String(projectFlag)) !== path21.resolve(cwd, String(pathFlag))) {
+  if (projectFlag !== undefined && pathFlag !== undefined && path22.resolve(cwd, String(projectFlag)) !== path22.resolve(cwd, String(pathFlag))) {
     throw new Error(`Conflicting project paths: --project ${projectFlag} and --path ${pathFlag}. Use one of --project or --path.`);
   }
   const flagPath = projectFlag ?? pathFlag;
   const flagLabel = projectFlag !== undefined ? "--project" : "--path";
   if (command?.project === "discover") {
     if (flagPath !== undefined)
-      return path21.resolve(cwd, String(flagPath));
-    return discoverProject(cwd) ?? path21.resolve(cwd, ".");
+      return path22.resolve(cwd, String(flagPath));
+    return discoverProject(cwd) ?? path22.resolve(cwd, ".");
   }
   if (command?.project !== "positional") {
     if (flagPath !== undefined)
-      return path21.resolve(cwd, String(flagPath));
-    return path21.resolve(cwd, ".");
+      return path22.resolve(cwd, String(flagPath));
+    return path22.resolve(cwd, ".");
   }
   const positionalPath = command.path.length === 1 ? parsed.positionals[1] : undefined;
   if (positionalPath !== undefined && flagPath !== undefined) {
-    const resolvedPositional = path21.resolve(cwd, positionalPath);
-    const resolvedFlag = path21.resolve(cwd, String(flagPath));
+    const resolvedPositional = path22.resolve(cwd, positionalPath);
+    const resolvedFlag = path22.resolve(cwd, String(flagPath));
     if (resolvedPositional !== resolvedFlag) {
       throw new Error(`Conflicting project paths: ${positionalPath} and ${flagLabel} ${flagPath}. Use either a positional path or ${flagLabel}, not both.`);
     }
     return resolvedFlag;
   }
   if (flagPath !== undefined || positionalPath !== undefined) {
-    return path21.resolve(cwd, String(flagPath ?? positionalPath));
+    return path22.resolve(cwd, String(flagPath ?? positionalPath));
   }
-  return path21.resolve(cwd, ".");
+  return path22.resolve(cwd, ".");
 }
 function captureIo(cwd) {
   const out = [];

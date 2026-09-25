@@ -24,6 +24,9 @@ const ACTIONS = {
   RECORD_NOT_FOUND: "Check the id with story entity show.",
   DECISION_NOT_FOUND: "Check the id with story decision list --include-inactive.",
   DECISION_TRANSITION_INVALID: "Only proposed or accepted decisions can be superseded.",
+  ISSUE_NOT_FOUND: "Check the id with story issue list --include-inactive.",
+  ISSUE_TRANSITION_INVALID: "Only an open issue, or a dismissal reopened by changed evidence, can be resolved or dismissed.",
+  ISSUE_DISMISSAL_UNBOUND: "List the affected ids and evidence on the issue so the dismissal can be matched exactly.",
   COMMAND_FAILED: "Fix the reported error and run the command again."
 };
 

@@ -7,7 +7,7 @@ import { createStoryProject } from "../src/story.js";
 import { makeTempDir, memoryIo } from "./helpers.js";
 
 const UNIMPLEMENTED = [
-  "context", "snapshot", "reconcile", "issue",
+  "context", "snapshot", "reconcile",
   "assets", "shots", "setup", "installation"
 ];
 
