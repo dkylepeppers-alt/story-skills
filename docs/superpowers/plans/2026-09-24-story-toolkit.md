@@ -177,12 +177,12 @@ The tests use public storage functions and explicit fixture helpers; define `set
 
 **Depends on:** Task 2.
 
-- [ ] Extend command registry entries to command paths, argument/option schemas, project requirements, mutation status and handler. Help, validation, examples and dispatch must read this registry.
-- [ ] Implement the shared result envelope and exit-code policy from the design. JSON stdout contains exactly one JSON value; operational logs go to stderr. Errors still use the envelope when JSON was requested and parsing permits it.
-- [ ] Implement discovery and initialization without overwriting an existing project. Create only required folders. Assign immutable opaque IDs; enforce uniqueness, including imported IDs.
-- [ ] Implement all entity types in the command matrix. Rename display name/path while preserving identity and updating structural links. `remove --policy refuse` reports dependencies; `detach` removes optional structural references and records consequences, never silently rewrites prose or retargets facts. Required semantic references still block removal until an explicit reconciliation proposal resolves them; deletion must leave a schema-valid project.
-- [ ] Port Markdown import, heading detection and natural chapter ordering. Import into a new directory only; ambiguous scene breaks produce a finding. Optional old-format conversion may be a separate explicit adapter, never a prerequisite for the fresh design.
-- [ ] Register commands as their handlers land in subsequent tasks; require the complete registry by Task 21. No hidden success stubs for unimplemented commands.
+- [x] Extend command registry entries to command paths, argument/option schemas, project requirements, mutation status and handler. Help, validation, examples and dispatch must read this registry.
+- [x] Implement the shared result envelope and exit-code policy from the design. JSON stdout contains exactly one JSON value; operational logs go to stderr. Errors still use the envelope when JSON was requested and parsing permits it.
+- [x] Implement discovery and initialization without overwriting an existing project. Create only required folders. Assign immutable opaque IDs; enforce uniqueness, including imported IDs.
+- [x] Implement all entity types in the command matrix. Rename display name/path while preserving identity and updating structural links. `remove --policy refuse` reports dependencies; `detach` removes optional structural references and records consequences, never silently rewrites prose or retargets facts. Required semantic references still block removal until an explicit reconciliation proposal resolves them; deletion must leave a schema-valid project.
+- [x] Port Markdown import, heading detection and natural chapter ordering. Import into a new directory only; ambiguous scene breaks produce a finding. Optional old-format conversion may be a separate explicit adapter, never a prerequisite for the fresh design.
+- [x] Register commands as their handlers land in subsequent tasks; require the complete registry by Task 21. No hidden success stubs for unimplemented commands.
 
 ```js
 test('rename preserves identity and manuscript wording', async () => {

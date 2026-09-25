@@ -41,7 +41,7 @@ Baseline source of truth: `src/commands.js` (23 commands, help order).
 | `report` | Inventory + progress + checks summary | Retained (shares the check diagnostics) | 10 | `test/diagnostics.test.js` |
 | `next` | Recommend next actions | Retained (never starts a chapter) | 10 | `test/diagnostics.test.js` |
 | `doctor` | Health checks with repair steps | Retained; gains `--installation` mode | 10, 18 | `test/diagnostics.test.js`, `test/install.test.js` |
-| `migrate` | Upgrade a project to the current schema | Adapted (fork format `story-toolkit` v1; upstream v2 conversion is an explicit adapter, not a prerequisite) | 3 | `test/project-schema.test.js`, `test/project.test.js` |
+| `migrate` | Upgrade a project to the current schema | Adapted (fork format `story-toolkit` v1; upstream v2 conversion is an explicit adapter, not a prerequisite). Task 3 did not replace the schema v2 `migrate` command and did not add that adapter | 3 | `test/project-schema.test.js` |
 | `add` | Create entity files (14 kinds) and reindex | Adapted (explicit immutable IDs) | 3 | `test/project.test.js`, `test/init-add-safety.test.js`, `test/command-contract.test.js` |
 | `rename` | Rename entity, update id references, never prose | Adapted | 3 | `test/rename-remove.test.js`, `test/project.test.js` |
 | `remove` | Remove entity, scrub references | Adapted (`--policy refuse\|detach`; required semantic references block) | 3 | `test/rename-remove.test.js`, `test/project.test.js` |
@@ -54,25 +54,43 @@ status|update|remove`, `context`, `entity …`, `check --only`, `snapshot`,
 `changes`, `impact`, `reconcile`, `repair`, `decision|issue|fact add|list|…`,
 `series link|check|timeline`, `assets`, `shots`, `publish check`) are specified
 by the design's command matrix; they are additions, not ledger dispositions.
+Task 3 registers only `entity add|rename|remove|show`. The other names above
+are not registered and fail as unknown commands (`test/command-contract.test.js`).
+
+Task 3 adds the `format: story-toolkit` layer beside schema v2. Default
+`init`, `import`, `add`, `rename`, and `remove` still scaffold and edit schema
+v2 projects. `--toolkit` selects fork init and import. Fork lifecycle commands
+are `entity add|rename|remove|show`. `--json` selects the result envelope.
+`--format` stays the build kind until the publishing task. Rename keeps the
+entity id, updates markdown link targets and exact frontmatter path strings,
+and does not rewrite prose or retarget facts. `remove --policy detach` clears
+optional scene `cast` entries and records `REFERENCE_DETACHED`; a fact
+subject/value or a scene `chapter-id` is required and blocks removal with no
+writes. `remove --policy refuse` reports dependencies and writes nothing.
 
 ## 2. CLI options
 
 Baseline source of truth: `src/options.js` (68 registered options: 60 with
-help, 8 undocumented aliases). The new option set is specified by the design
-(`--format text|json`, `--project`, `--dry-run`, structured `--data`); this
-section records where each baseline option's behavior lands.
+help, 8 undocumented aliases, plus the Task 3 flags below). The new option set
+is specified by the design (`--format text|json`, `--project`, `--dry-run`,
+structured `--data`); this section records where each baseline option's
+behavior lands. Task 3 keeps `--format` as the build kind and adds `--json`.
 
 | Option group | Options | Status | Task | Replacement regression |
 |---|---|---|---|---|
-| Project selection | `--path` | Retained | 3 | `test/command-contract.test.js` |
+| Project selection | `--path` | Retained. `--project` is a new alias; discovery walks parents for `story.md` only when neither flag nor a positional path is set | 3 | `test/command-contract.test.js`, `test/registry.test.js` |
 | Creation | `--title --dir --genre --sub-genre --setting-era --theme --themes --pov --tense --synopsis --series --book-number --follows --precedes --force` | Adapted | 3 | `test/project.test.js`, `test/init-add-safety.test.js` |
 | Maintenance | `--write --log --date` | Retained | 10 | `test/progress.test.js`, `test/story.test.js` |
 | Comparison | `--ref --against` | Adapted (git refs retained; `--against` removed, see §7) | 8 | `test/compare.test.js`, `test/changes.test.js` |
-| Output | `--out --format --shunn --pages --actionable` | Adapted (`--format` splits into `--format text\|json` and `--kind` for builds) | 10, 12 | `test/publishing.test.js`, `test/command-contract.test.js` |
+| Output | `--out --format --shunn --pages --actionable` | Adapted (`--format` stays `markdown\|epub\|docx\|shunn` until Task 12 `--kind`). Task 3 adds `--json` for the result envelope instead of overloading `--format` | 3, 10, 12 | `test/publishing.test.js`, `test/command-contract.test.js` |
 | Knowledge | `--at` | Adapted (chapter id → scene/beat cursor) | 5 | `test/knowledge.test.js` |
 | Entity fields | `--number --chapter --scene --type --role --status --mode --date --time --travel-hours --dilemma --sequel --location(s) --character(s) --mention(s) --member(s) --owner --arc(s) --introduced --resolved --planted --payoff --significance-delayed --category --alias(es) --region --population --controlled-by --prevalence --acts --placement --order --source(s) --used-in` | Adapted (schema-validated `--data <json-file>` mutations become the primary contract; per-design §9) | 3, 5, 6, 13 | `test/project.test.js`, `test/state.test.js`, `test/memory.test.js`, `test/assets.test.js` |
-| Undocumented aliases | `--locations --characters --mentions --members --arcs --aliases --act --sources` | Intentionally removed (undocumented convenience aliases; behavior replaced by repeatable documented forms and `--data`) | 3 | `test/command-contract.test.js` |
-| Global (new) | `--help/-h --version/-v` | Retained | 3 | `test/registry.test.js` |
+| Undocumented aliases | `--locations --characters --mentions --members --arcs --aliases --act --sources` | Intentionally removed once schema v2 `add` is replaced (undocumented convenience aliases; behavior replaced by repeatable documented forms and `--data`). Task 3 still accepts them because v2 `add` and `test/cli.test.js` use them | 3 | `test/cli.test.js` |
+| Global (new) | `--help/-h --version/-v` | Retained. `--help` and `--version` stay plain text even when `--json` is present | 3 | `test/registry.test.js`, `test/command-contract.test.js` |
+| Result envelope (new) | `--json` | Added in Task 3. Stdout is one JSON result object; logs stay on stderr | 3 | `test/command-contract.test.js` |
+| Mutation preview (new) | `--dry-run` | Added in Task 3 for fork init, import, and entity mutations | 3 | `test/project.test.js` |
+| Removal policy (new) | `--policy refuse\|detach` | Added in Task 3 for `entity remove` | 3 | `test/rename-remove.test.js` |
+| Fork selector (new) | `--toolkit` | Added in Task 3. Selects story-toolkit `init` and `import` | 3 | `test/project.test.js`, `test/command-contract.test.js` |
 
 ## 3. Skills
 

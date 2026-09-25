@@ -32,6 +32,10 @@ function diagnostic(code, message, action) {
  * overwrite later edits.
  */
 export async function loadProject(root) {
+  return loadProjectSync(root);
+}
+
+export function loadProjectSync(root) {
   const diagnostics = [];
   const records = new Map();
 

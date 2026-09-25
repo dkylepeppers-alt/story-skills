@@ -7,6 +7,14 @@ import { formatProseReport } from "./prose.js";
 import { formatSeriesReport } from "./series.js";
 import { formatTimeline } from "./timeline.js";
 import {
+  addEntityCommand,
+  removeEntityCommand,
+  renameEntityCommand,
+  showEntityCommand
+} from "./cli/handlers/entity.js";
+import { importToolkitCommand, initToolkitCommand } from "./cli/handlers/project.js";
+import { defineCommands } from "./cli/registry.js";
+import {
   buildBook,
   checkProjectContinuity,
   compareProject,
@@ -38,12 +46,14 @@ import {
 // (or --path), "flag" takes only --path, and "none" means the command makes a
 // new project and refuses --path. `run` receives { parsed, io, cwd, root },
 // where root() resolves the project path, and returns the exit code.
-export const COMMANDS = [
+const COMMAND_LIST = [
   {
     name: "init",
     usage: "init <title>",
     summary: ["Scaffold a story project"],
     project: "none",
+    examples: ["story init \"Working Title\"", "story init \"Working Title\" --toolkit"],
+    toolkit: initToolkitCommand,
     run({ parsed, io, cwd }) {
       const result = createStoryProject({
         title: parsed.positionals.slice(1).join(" "),
@@ -74,6 +84,8 @@ export const COMMANDS = [
     usage: "import <source>",
     summary: ["Split an existing manuscript into a new story project"],
     project: "none",
+    examples: ["story import book.md --title \"Imported\""],
+    toolkit: importToolkitCommand,
     run({ parsed, io, cwd }) {
       const result = importManuscript({
         source: parsed.positionals[1],
@@ -377,8 +389,97 @@ export const COMMANDS = [
       }
       return 0;
     }
+  },
+  {
+    name: "entity",
+    path: ["entity", "add"],
+    usage: "entity add <type> <name>",
+    summary: ["Add an entity with an immutable id"],
+    project: "discover",
+    mutates: true,
+    returnsResult: true,
+    strictOptions: true,
+    enforceArgs: true,
+    args: [
+      { name: "type", required: true },
+      { name: "name", required: true, rest: true }
+    ],
+    optionSchema: [
+      { name: "project" },
+      { name: "path" },
+      { name: "json" },
+      { name: "dry-run" },
+      { name: "chapter" }
+    ],
+    examples: ["story entity add character Ada"],
+    run: addEntityCommand
+  },
+  {
+    name: "entity",
+    path: ["entity", "rename"],
+    usage: "entity rename <id> <name>",
+    summary: ["Rename an entity and keep its id"],
+    project: "discover",
+    mutates: true,
+    returnsResult: true,
+    strictOptions: true,
+    enforceArgs: true,
+    args: [
+      { name: "id", required: true },
+      { name: "name", required: true, rest: true }
+    ],
+    optionSchema: [
+      { name: "project" },
+      { name: "path" },
+      { name: "json" },
+      { name: "dry-run" }
+    ],
+    examples: ["story entity rename chr_ada Adaline"],
+    run: renameEntityCommand
+  },
+  {
+    name: "entity",
+    path: ["entity", "remove"],
+    usage: "entity remove <id>",
+    summary: ["Remove an entity using --policy"],
+    project: "discover",
+    mutates: true,
+    returnsResult: true,
+    strictOptions: true,
+    enforceArgs: true,
+    args: [{ name: "id", required: true }],
+    optionSchema: [
+      { name: "project" },
+      { name: "path" },
+      { name: "json" },
+      { name: "dry-run" },
+      { name: "policy", required: true, values: ["refuse", "detach"] }
+    ],
+    examples: ["story entity remove chr_ada --policy detach"],
+    run: removeEntityCommand
+  },
+  {
+    name: "entity",
+    path: ["entity", "show"],
+    usage: "entity show <id>",
+    summary: ["Show one entity by its id"],
+    project: "discover",
+    mutates: false,
+    returnsResult: true,
+    strictOptions: true,
+    enforceArgs: true,
+    args: [{ name: "id", required: true }],
+    optionSchema: [
+      { name: "project" },
+      { name: "path" },
+      { name: "json" }
+    ],
+    examples: ["story entity show chr_ada"],
+    run: showEntityCommand
   }
 ];
+
+export const COMMANDS = defineCommands(COMMAND_LIST);
 
 function collectThemes(options) {
   return []

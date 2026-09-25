@@ -7,13 +7,19 @@ import { makeTempDir, memoryIo } from "./helpers.js";
 
 describe("command registry", () => {
   test("every command is well formed and unique", () => {
-    const names = COMMANDS.map((command) => command.name);
-    expect(new Set(names).size).toBe(names.length);
+    const paths = COMMANDS.map((command) => command.path.join(" "));
+    expect(new Set(paths).size).toBe(paths.length);
     for (const command of COMMANDS) {
+      expect(command.path[0]).toBe(command.name);
       expect(command.usage.split(" ")[0]).toBe(command.name);
-      expect(["positional", "flag", "none"]).toContain(command.project);
+      expect(["positional", "flag", "discover", "none"]).toContain(command.project);
       expect(command.summary.length).toBeGreaterThan(0);
       expect(typeof command.run).toBe("function");
+      expect(command.handler).toBe(command.run);
+      expect(typeof command.mutates).toBe("boolean");
+      expect(Array.isArray(command.args)).toBe(true);
+      expect(Array.isArray(command.optionSchema)).toBe(true);
+      expect(Array.isArray(command.examples)).toBe(true);
     }
   });
 
@@ -40,18 +46,20 @@ describe("command registry", () => {
   test("positional commands take their first argument as the project path", () => {
     const cwd = makeTempDir();
     for (const command of COMMANDS) {
-      const parsed = parseArgs([command.name, "book"]);
+      const parsed = parseArgs([...command.path, "book"]);
       const expected = command.project === "positional" ? path.join(cwd, "book") : cwd;
-      expect(resolveRoot(cwd, parsed, command.name)).toBe(expected);
+      expect(resolveRoot(cwd, parsed, command.path[0])).toBe(expected);
     }
   });
 
   test("commands that create projects refuse --path", () => {
     const cwd = makeTempDir();
     for (const command of COMMANDS.filter((entry) => entry.project === "none")) {
-      const io = memoryIo(cwd);
-      expect(runCli([command.name, "x", "--path", "."], io)).toBe(1);
-      expect(io.error()).toBe(`${command.name} uses --dir for the target directory. --path is the project root for other commands.\n`);
+      for (const flag of ["path", "project"]) {
+        const io = memoryIo(cwd);
+        expect(runCli([command.name, "x", `--${flag}`, "."], io)).toBe(1);
+        expect(io.error()).toBe(`${command.name} uses --dir for the target directory. --${flag} is the project root for other commands.\n`);
+      }
     }
   });
 });

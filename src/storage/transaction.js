@@ -32,6 +32,10 @@ const ACTIONS = new Set(["create", "replace", "remove"]);
  * journaling, or writing anything.
  */
 export async function writeTransaction(root, writes, options = {}) {
+  return writeTransactionSync(root, writes, options);
+}
+
+export function writeTransactionSync(root, writes, options = {}) {
   if (!Array.isArray(writes) || writes.length === 0) {
     throw new StorageError("INVALID_WRITE", "A transaction needs a non-empty array of writes");
   }

@@ -3571,6 +3571,9 @@ function readMarkdown(filePath, root) {
   return { ...parsed, rawMarkdown };
 }
 
+export { discoverProject } from "./project/discover.js";
+export { initProject as initToolkitProject } from "./project/init.js";
+
 export function writeFile(filePath, contents, options = {}) {
   const target = prepareWriteTarget(filePath, options.root);
   fs.writeFileSync(target, contents, "utf8");
