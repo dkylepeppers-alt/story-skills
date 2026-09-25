@@ -150,15 +150,81 @@ describe("story-toolkit projects", () => {
     expect(project.records.get("fact_ada_home").record.value).toBe("the pier");
 
     const chapterAfter = p.read("chapters/one.md");
-    expect(chapterAfter).toBe(chapter.replaceAll("characters/chr_ada.md", "characters/adaline.md"));
+    expect(chapterAfter).toBe(chapter);
     expect(chapterAfter).toContain("Ada waited.");
-    expect(chapterAfter).toContain("[Ada](../characters/adaline.md)");
-    expect(chapterAfter).toContain("[Ada](/characters/adaline.md#notes)");
+    expect(chapterAfter).toContain("[Ada](../characters/chr_ada.md)");
+    expect(chapterAfter).toContain("[Ada](/characters/chr_ada.md#notes)");
     expect(chapterAfter).toContain("[Ada](https://example.com/ada)");
     expect(chapterAfter).not.toContain("Adaline waited");
+    const stale = renamed.envelope.diagnostics.filter((item) => item.code === "STALE_PROSE_LINK");
+    expect(stale.length).toBe(2);
+    const staleText = stale.map((item) => item.message).join("\n");
+    expect(staleText).toContain("../characters/chr_ada.md");
+    expect(staleText).toContain("/characters/chr_ada.md#notes");
+    expect(staleText).not.toContain("example.com");
+    expect(renamed.envelope.ok).toBe(true);
     expect(readBytes(p.root, "facts/fact_ada_home.md").equals(factBefore)).toBe(true);
     expect(p.read("scenes/scn_cellar.md")).not.toBe(sceneBefore);
     expect(p.read("scenes/scn_cellar.md")).toContain("chr_ada");
+  });
+
+  test("rename leaves a prose link inside a code span untouched and unreported", async () => {
+    const p = await makeProject();
+    await p.addEntity({ id: "chr_ada", type: "character", name: "Ada" });
+    const chapter = `${p.read("chapters/one.md").replace(/\n?$/, "\n")}\`[Ada](../characters/chr_ada.md)\`\n\`\`\`\n[Ada](../characters/chr_ada.md)\n\`\`\`\n`;
+    p.write("chapters/one.md", chapter);
+    const renamed = await renameEntity(p.root, "chr_ada", "Adaline");
+    expect(renamed.exitCode).toBe(0);
+    expect(p.read("chapters/one.md")).toBe(chapter);
+    expect(renamed.envelope.diagnostics.filter((item) => item.code === "STALE_PROSE_LINK")).toEqual([]);
+  });
+
+  test("rename reports a titled prose link without rewriting it", async () => {
+    const p = await makeProject();
+    await p.addEntity({ id: "chr_ada", type: "character", name: "Ada" });
+    const chapter = `${p.read("chapters/one.md").replace(/\n?$/, "\n")}[Ada](../characters/chr_ada.md "portrait")\n`;
+    p.write("chapters/one.md", chapter);
+    const renamed = await renameEntity(p.root, "chr_ada", "Adaline");
+    expect(renamed.exitCode).toBe(0);
+    expect(p.read("chapters/one.md")).toBe(chapter);
+    const stale = renamed.envelope.diagnostics.filter((item) => item.code === "STALE_PROSE_LINK");
+    expect(stale).toHaveLength(1);
+    expect(stale[0].severity).toBe("warning");
+    expect(stale[0].message).toContain("../characters/chr_ada.md");
+    expect(stale[0].message).toContain("portrait");
+  });
+
+  test("rename leaves a prose mention of the old name unchanged", async () => {
+    const p = await makeProject();
+    await p.addEntity({ id: "chr_ada", type: "character", name: "Ada" });
+    const chapter = `${p.read("chapters/one.md").replace(/\n?$/, "\n")}Ada waited at the pier.\n`;
+    p.write("chapters/one.md", chapter);
+    const renamed = await renameEntity(p.root, "chr_ada", "Adaline");
+    expect(renamed.exitCode).toBe(0);
+    expect(p.read("chapters/one.md")).toBe(chapter);
+    expect(p.read("chapters/one.md")).toContain("Ada waited at the pier.");
+    expect(p.read("chapters/one.md")).not.toContain("Adaline");
+    expect(renamed.envelope.diagnostics.filter((item) => item.code === "STALE_PROSE_LINK")).toEqual([]);
+  });
+
+  test("rename updates an exact path field on the renamed record without rewriting its prose", async () => {
+    const p = await makeProject();
+    await p.addEntity({
+      id: "chr_ada",
+      type: "character",
+      name: "Ada",
+      sources: [{ path: "characters/chr_ada.md", hash: "a".repeat(64), kind: "author-decision" }]
+    });
+    const original = p.read("characters/chr_ada.md");
+    const withProse = `${original.replace(/\n?$/, "\n")}Ada kept the old name.\n[Ada](./chr_ada.md)\n`;
+    p.write("characters/chr_ada.md", withProse);
+    const renamed = await renameEntity(p.root, "chr_ada", "Adaline");
+    expect(renamed.exitCode).toBe(0);
+    const next = p.read("characters/adaline.md");
+    expect(next).toContain("path: characters/adaline.md");
+    expect(next).toContain("Ada kept the old name.\n[Ada](./chr_ada.md)\n");
+    expect(next).not.toContain("path: characters/chr_ada.md");
+    expect(renamed.envelope.diagnostics.some((item) => item.code === "STALE_PROSE_LINK")).toBe(true);
   });
 
   test("init creates only story.md, never overwrites, and assigns an opaque id", () => {

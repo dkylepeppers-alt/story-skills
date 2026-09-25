@@ -212,22 +212,58 @@ function resolveLink(fromRel, target) {
   return resolved;
 }
 
-function relativeLink(fromRel, targetRel) {
-  const relative = path.posix.relative(path.posix.dirname(fromRel), targetRel);
-  return relative.startsWith(".") ? relative : `./${relative}`;
+function outsideInlineCode(line) {
+  let result = "";
+  let index = 0;
+  while (index < line.length) {
+    const tick = line.indexOf("`", index);
+    if (tick === -1) {
+      result += line.slice(index);
+      break;
+    }
+    result += line.slice(index, tick);
+    let ticks = 0;
+    while (line[tick + ticks] === "`") ticks += 1;
+    const token = "`".repeat(ticks);
+    const closer = line.indexOf(token, tick + ticks);
+    if (closer === -1) {
+      result += line.slice(tick);
+      break;
+    }
+    index = closer + ticks;
+  }
+  return result;
 }
 
-function rewriteLinks(markdown, fromRel, oldRel, newRel) {
-  if (oldRel === newRel) return markdown;
-  return markdown.replace(/\[([^\]]*)\]\(([^)\s]+)\)/g, (full, label, target) => {
-    const hash = target.indexOf("#");
-    const pathPart = hash === -1 ? target : target.slice(0, hash);
-    const suffix = hash === -1 ? "" : target.slice(hash);
-    const resolved = resolveLink(fromRel, pathPart);
-    if (resolved !== oldRel) return full;
-    const next = pathPart.startsWith("/") ? `/${newRel}` : relativeLink(fromRel, newRel);
-    return `[${label}](${next}${suffix})`;
-  });
+function proseText(markdown) {
+  let fence = null;
+  const parts = [];
+  for (const line of markdown.split(/(?<=\n)/)) {
+    const marker = /^[ \t]{0,3}(`{3,}|~{3,})(.*)$/.exec(line.replace(/\r?\n$/, ""));
+    if (marker) {
+      const char = marker[1][0];
+      const size = marker[1].length;
+      if (!fence) fence = { char, size };
+      else if (char === fence.char && size >= fence.size && marker[2].trim() === "") fence = null;
+      continue;
+    }
+    if (!fence) parts.push(outsideInlineCode(line));
+  }
+  return parts.join("");
+}
+
+function staleProseLinks(markdown, fromRel, oldRel, newRel) {
+  if (oldRel === newRel) return [];
+  const found = [];
+  for (const match of proseText(markdown).matchAll(/\[[^\]]*\]\(([^)]*)\)/g)) {
+    const inside = match[1].trim();
+    const destination = /^(\S+)/.exec(inside)?.[1] ?? "";
+    const hash = destination.indexOf("#");
+    const pathPart = hash === -1 ? destination : destination.slice(0, hash);
+    if (resolveLink(fromRel, pathPart) !== oldRel) continue;
+    found.push(inside);
+  }
+  return found;
 }
 
 function rewritePathFields(markdown, file, oldRel, newRel) {
@@ -276,13 +312,26 @@ export function renameEntity(root, id, name, options = {}) {
   } catch (error) {
     return failure(command, error.message, "INVALID_INVOCATION", 2, [id]);
   }
-  const updatedData = displayRecord(parsed.data, nextName);
-  let content = replaceFrontmatter(markdown, updatedData);
   const directory = path.posix.dirname(oldRel);
   const taken = new Set(directoryNames(root, directory === "." ? "" : directory).filter((item) => item !== path.posix.basename(oldRel)));
   const filename = uniqueFilename(slugify(nextName), id, taken);
   const newRel = directory === "." ? filename : `${directory}/${filename}`;
-  content = rewriteLinks(content, newRel, oldRel, newRel);
+  const updatedData = replaceExact(displayRecord(parsed.data, nextName), oldRel, newRel);
+  const content = replaceFrontmatter(markdown, updatedData);
+  const diagnostics = [];
+  const noteStale = (file, text, fromRel) => {
+    for (const inside of staleProseLinks(text, fromRel, oldRel, newRel)) {
+      diagnostics.push(finding({
+        code: "STALE_PROSE_LINK",
+        severity: "warning",
+        message: `${file}: prose link (${inside}) still points at ${oldRel}`,
+        recordIds: [id],
+        evidence: "candidate",
+        action: "Update the manuscript link by hand if it should follow the renamed file. Rename does not rewrite prose."
+      }));
+    }
+  };
+  noteStale(newRel, content, newRel);
   const writes = [];
   const hash = sha256Hex(original);
   if (newRel === oldRel) {
@@ -295,20 +344,23 @@ export function renameEntity(root, id, name, options = {}) {
     if (file === oldRel) continue;
     const raw = fs.readFileSync(path.join(root, file));
     const text = raw.toString("utf8");
-    const updated = rewriteLinks(rewritePathFields(text, file, oldRel, newRel), file, oldRel, newRel);
+    const updated = rewritePathFields(text, file, oldRel, newRel);
     if (updated !== text) writes.push({ path: file, action: "replace", expectedHash: sha256Hex(raw), content: updated });
+    noteStale(file, text, file);
   }
   try {
     const recorded = commit(root, writes, options.dryRun === true);
     return {
       envelope: envelope({
         command,
-        ok: true,
+        ok: diagnostics.every((item) => item.severity !== "error"),
         data: { id, type: entry.type, name: nextName, path: newRel, dryRun: options.dryRun === true },
+        diagnostics,
         writes: recorded
       }),
-      exitCode: 0,
-      text: options.dryRun === true ? "" : `Renamed ${id} to ${nextName}: ${newRel}\n`
+      exitCode: diagnostics.some((item) => item.severity === "error") ? 1 : 0,
+      text: options.dryRun === true ? "" : `Renamed ${id} to ${nextName}: ${newRel}\n`,
+      log: diagnostics.length > 0 ? `${diagnostics.map((item) => item.message).join("\n")}\n` : undefined
     };
   } catch (error) {
     return fromStorageError(command, error);
