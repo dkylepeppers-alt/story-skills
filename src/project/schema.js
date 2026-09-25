@@ -1,13 +1,36 @@
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import Ajv2020 from "ajv/dist/2020.js";
 import { FORMAT, SCHEMA_VERSION } from "../contracts.js";
+// Static JSON imports, so bundlers embed the schemas: the bundled fallback
+// CLI runs from an installed skill directory with no schemas/ beside it.
+import projectSchema from "../../schemas/project.schema.json" with { type: "json" };
+import entitySchema from "../../schemas/entity.schema.json" with { type: "json" };
+import sceneSchema from "../../schemas/scene.schema.json" with { type: "json" };
+import factSchema from "../../schemas/fact.schema.json" with { type: "json" };
+import decisionSchema from "../../schemas/decision.schema.json" with { type: "json" };
+import issueSchema from "../../schemas/issue.schema.json" with { type: "json" };
+import researchSchema from "../../schemas/research.schema.json" with { type: "json" };
+import seriesSchema from "../../schemas/series.schema.json" with { type: "json" };
+import assetSchema from "../../schemas/asset.schema.json" with { type: "json" };
+import shotSchema from "../../schemas/shot.schema.json" with { type: "json" };
+import proposalSchema from "../../schemas/proposal.schema.json" with { type: "json" };
+import scopeSchema from "../../schemas/scope.schema.json" with { type: "json" };
 
-const SCHEMA_NAMES = [
-  "project", "entity", "scene", "fact", "decision", "issue",
-  "research", "series", "asset", "shot", "proposal", "scope"
-];
+const SCHEMAS = {
+  project: projectSchema,
+  entity: entitySchema,
+  scene: sceneSchema,
+  fact: factSchema,
+  decision: decisionSchema,
+  issue: issueSchema,
+  research: researchSchema,
+  series: seriesSchema,
+  asset: assetSchema,
+  shot: shotSchema,
+  proposal: proposalSchema,
+  scope: scopeSchema
+};
+
+const SCHEMA_NAMES = Object.keys(SCHEMAS);
 
 const ENTITY_TYPES = new Set([
   "character", "location", "system", "faction", "object", "arc", "chapter",
@@ -26,8 +49,6 @@ const TYPE_SCHEMAS = {
   shot: "shot"
 };
 
-const SCHEMA_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "schemas");
-
 let compiled = null;
 
 function validators() {
@@ -35,7 +56,7 @@ function validators() {
     const ajv = new Ajv2020({ allErrors: true });
     const schemas = {};
     for (const name of SCHEMA_NAMES) {
-      const schema = JSON.parse(fs.readFileSync(path.join(SCHEMA_DIR, `${name}.schema.json`), "utf8"));
+      const schema = SCHEMAS[name];
       schemas[name] = schema;
       ajv.addSchema(schema, schema.$id);
     }
