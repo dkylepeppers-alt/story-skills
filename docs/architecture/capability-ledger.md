@@ -31,7 +31,7 @@ Baseline source of truth: `src/commands.js` (23 commands, help order).
 | `reindex` | Rebuild registry tables from markdown | Retained (derived indexes, `--write` semantics per design) | 10 | `test/diagnostics.test.js`, `test/story.test.js` |
 | `wordcount` | Count chapter prose words; `--write` updates frontmatter | Retained | 10 | `test/story.test.js`, `test/cli.test.js` |
 | `links` | Cross-reference and backlink checks | Retained | 10 | `test/diagnostics.test.js` |
-| `continuity` | Deaths, promises/payoffs, questions, casts, durable state; exemptions | Retained | 10 | `test/continuity.test.js`, `test/custody-time.test.js`, `test/clue.test.js`, `test/exemptions.test.js` |
+| `continuity` | Deaths, promises/payoffs, questions, casts, durable state; exemptions | Retained for schema v2 (story-toolkit projects replace substring exemptions with exact issue dismissals, Task 6) | 10 | `test/continuity.test.js`, `test/custody-time.test.js`, `test/clue.test.js`, `test/exemptions.test.js` |
 | `knowledge` | What a character knew at a chapter (`--at`) | Adapted (story-toolkit projects use `--scene`/`--beat`/`--side` cursors and return knows, believes, and unresolved items; schema v2 keeps `--at`; usage errors exit 2 under the shared exit codes) | 5 | `test/knowledge.test.js`, `test/knowledge-errors.test.js`, `test/state.test.js` |
 | `compare` | Compare with an earlier draft: word changes, added/removed chapters, unchanged paragraphs | Adapted (stable-ID matching, scopes, snapshots; `--against` folder baseline intentionally removed, see §7) | 8 | `test/compare.test.js`, `test/changes.test.js`, `test/scope.test.js` |
 | `progress` | Words vs targets/deadline; `--log` records the session | Retained | 10 | `test/progress.test.js` |
@@ -54,9 +54,11 @@ status|update|remove`, `context`, `entity …`, `check --only`, `snapshot`,
 `changes`, `impact`, `reconcile`, `repair`, `decision|issue|fact add|list|…`,
 `series link|check|timeline`, `assets`, `shots`, `publish check`) are specified
 by the design's command matrix; they are additions, not ledger dispositions.
-Task 3 registers `entity add|rename|remove|show` and Task 5 registers
-`fact add|list|retract`. The other names above are not registered and fail as
-unknown commands (`test/command-contract.test.js`).
+Task 3 registers `entity add|rename|remove|show`, Task 5 registers
+`fact add|list|retract`, and Task 6 registers `decision add|list|supersede`
+and `issue add|list|resolve|dismiss`.
+The other names above are not registered and fail as unknown commands
+(`test/command-contract.test.js`).
 
 Task 3 adds the `format: story-toolkit` layer beside schema v2. Default
 `init`, `import`, `add`, `rename`, and `remove` still scaffold and edit schema
@@ -111,6 +113,42 @@ usage errors and a missing project exit 2, an unknown character or chapter
 exits 1, and permission failures exit 4. `knowledge` now uses project
 discovery (`--project`, `--path`, or the nearest parent with `story.md`).
 
+Task 6 replaces substring exemptions on story-toolkit projects with exact
+issue dismissals (`src/memory/issues.js`). A dismissed issue names one
+diagnostic code (`dismissal.code`), its `affected-ids`, and the `evidence`
+fingerprints it was judged against. `applyDismissals` hides a finding only
+when the code is identical, the finding's record ids equal the affected ids,
+and every evidence hash still matches, so one dismissal cannot hide the same
+code on another record. Changed or unreadable evidence reopens the issue
+(`ISSUE_REOPENED`, carrying the prior dismissal). A dismissal without a code,
+affected ids, or evidence is `ISSUE_DISMISSAL_UNBOUND` and dismisses nothing.
+Story-toolkit projects never read `continuity/exemptions.md`; schema v2
+`continuity` keeps its substring exemptions until that command is replaced.
+Wiring dismissals into `check` is the checks task. Decisions
+(`src/memory/decisions.js`) apply by `scope-ids`, where the project id means
+the whole project. Only accepted decisions are instructions, and
+supersession cycles are `SUPERSESSION_CYCLE` errors. `decision add --data`
+records a proposed, accepted, or rejected decision with at least one scope
+id; scope ids go through the shared reference index. `decision list` shows
+proposed and accepted decisions (`--include-inactive` adds rejected and
+superseded; `--record <id>` keeps that record's and project-wide scope).
+`decision supersede <id> --data` creates an accepted successor that
+supersedes `<id>` and marks `<id>` superseded in one transaction, refusing a
+successor that would close a cycle.
+
+`issue add --data` records an open issue and fingerprints its evidence.
+`issue list` shows open issues, including dismissals reopened by changed
+evidence (`--include-inactive` adds resolved and dismissed; `--record <id>`
+keeps issues affecting that record). `issue resolve <id> [--data]` and
+`issue dismiss <id> --data` accept only an issue that is open now. A
+dismissal names `code`, optional `record-id`, and `reason`, needs affected
+ids and evidence on the issue, and re-fingerprints the evidence against the
+current bytes. Each transition appends a line to the issue body's
+`## History` section, including the prior dismissal when evidence reopened
+it. Decision scope ids, issue affected ids, evidence scenes, and
+`dismissal.record-id` are references in the shared index, so they are
+`DANGLING_REFERENCE` findings when missing and block entity removal.
+
 ## 2. CLI options
 
 Baseline source of truth: `src/options.js` (68 registered options: 60 with
@@ -133,11 +171,12 @@ them to `--kind`.
 | Undocumented aliases | `--locations --characters --mentions --members --arcs --aliases --act --sources` | Intentionally removed once schema v2 `add` is replaced (undocumented convenience aliases; behavior replaced by repeatable documented forms and `--data`). Task 3 still accepts them because v2 `add` and `test/cli.test.js` use them | 3 | `test/cli.test.js` |
 | Global (new) | `--help/-h --version/-v` | Retained. `--help` and `--version` stay plain text even when `--format json` is present | 3 | `test/registry.test.js`, `test/command-contract.test.js` |
 | Result envelope (new) | `--format text\|json` | Stdout is one JSON result object when the value is `json`; logs stay on stderr. `text` is the plain result | 3 | `test/command-contract.test.js` |
-| Mutation preview (new) | `--dry-run` | Added in Task 3 for fork init, import, and entity mutations; Task 5 adds `fact add` and `fact retract` | 3, 5 | `test/project.test.js`, `test/state.test.js` |
+| Mutation preview (new) | `--dry-run` | Added in Task 3 for fork init, import, and entity mutations; Task 5 adds `fact add` and `fact retract`; Task 6 adds decision and issue mutations | 3, 5, 6 | `test/project.test.js`, `test/state.test.js`, `test/memory.test.js` |
 | Removal policy (new) | `--policy refuse\|detach` | Added in Task 3 for `entity remove` | 3 | `test/rename-remove.test.js` |
-| Structured data (new) | `--data <json-file>` | Added in Task 5 for `fact add` | 5 | `test/state.test.js` |
+| Structured data (new) | `--data <json-file>` | Added in Task 5 for `fact add`; Task 6 adds `decision add`, `decision supersede`, `issue add`, `issue resolve`, and `issue dismiss` | 5, 6 | `test/state.test.js`, `test/memory.test.js` |
 | Story cursor (new) | `--scene <n\|id> --beat <id> --side before\|after` | Task 5 `fact list` and `knowledge` cursor. `--scene` still takes a scene number for schema v2 `add`; `--side` defaults to `before` | 5 | `test/state.test.js` |
-| Inactive records (new) | `--include-inactive --include-work` | Added in Task 5 for `fact list`. Listing never makes an inactive or `work/` record apply at a cursor | 5 | `test/state.test.js` |
+| Inactive records (new) | `--include-inactive --include-work` | Added in Task 5 for `fact list`. Listing never makes an inactive or `work/` record apply at a cursor. Task 6 adds `--include-inactive` to `decision list` and `issue list` | 5, 6 | `test/state.test.js`, `test/memory.test.js` |
+| Record scope (new) | `--record <id>` | Added in Task 6 for `decision list` and `issue list` | 6 | `test/memory.test.js` |
 | Fork selector (new) | `--toolkit` | Added in Task 3. Selects story-toolkit `init` and `import` | 3 | `test/project.test.js`, `test/command-contract.test.js` |
 
 ## 3. Skills
@@ -222,7 +261,7 @@ is superseded or intentionally removed.
 | `knowledge-errors.test.js` | Knowledge failure modes | Adapted | 5 | same file + `test/state.test.js` |
 | `continuity.test.js` | Continuity engine contracts | Adapted | 5, 10 | same file + `test/state.test.js` |
 | `clue.test.js` | Setup/payoff ordering | Retained | 10 | same file |
-| `exemptions.test.js` | Continuity exemptions | Adapted | 6 | `test/memory.test.js` + same file |
+| `exemptions.test.js` | Continuity exemptions | Adapted (schema v2 substring cases kept; story-toolkit exact-dismissal cases added) | 6 | `test/memory.test.js` + same file |
 | `compare.test.js` | Draft comparison | Adapted | 8 | same file + `test/changes.test.js` |
 | `prose.test.js` | Prose lint | Adapted | 10 | same file |
 | `progress.test.js` | Progress tracking/logging | Adapted | 10 | same file |

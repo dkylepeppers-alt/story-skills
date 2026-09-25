@@ -11,7 +11,9 @@ import {
   renameEntityCommand,
   showEntityCommand
 } from "./cli/handlers/entity.js";
+import { addDecisionCommand, listDecisionsCommand, supersedeDecisionCommand } from "./cli/handlers/decision.js";
 import { addFactCommand, listFactsCommand, retractFactCommand } from "./cli/handlers/fact.js";
+import { addIssueCommand, dismissIssueCommand, listIssuesCommand, resolveIssueCommand } from "./cli/handlers/issue.js";
 import { knowledgeCommand } from "./cli/handlers/knowledge.js";
 import { importToolkitCommand, initToolkitCommand } from "./cli/handlers/project.js";
 import { timelineCommand } from "./cli/handlers/timeline.js";
@@ -537,6 +539,149 @@ const COMMAND_LIST = [
     ],
     examples: ["story fact retract fact_key_handoff"],
     run: retractFactCommand
+  },
+  {
+    name: "decision",
+    path: ["decision", "add"],
+    usage: "decision add --data <json-file>",
+    summary: ["Record a scoped author decision from", "schema-validated data"],
+    project: "discover",
+    mutates: true,
+    returnsResult: true,
+    strictOptions: true,
+    enforceArgs: true,
+    optionSchema: [
+      { name: "project" },
+      { name: "path" },
+      { name: "format", values: ["text", "json"] },
+      { name: "dry-run" },
+      { name: "data", required: true }
+    ],
+    examples: ["story decision add --data decision.json"],
+    run: addDecisionCommand
+  },
+  {
+    name: "decision",
+    path: ["decision", "list"],
+    usage: "decision list",
+    summary: ["List decisions; only accepted ones are instructions"],
+    project: "discover",
+    mutates: false,
+    returnsResult: true,
+    strictOptions: true,
+    enforceArgs: true,
+    optionSchema: [
+      { name: "project" },
+      { name: "path" },
+      { name: "format", values: ["text", "json"] },
+      { name: "include-inactive" },
+      { name: "record" }
+    ],
+    examples: ["story decision list --record scn_cellar"],
+    run: listDecisionsCommand
+  },
+  {
+    name: "decision",
+    path: ["decision", "supersede"],
+    usage: "decision supersede <id> --data <json-file>",
+    summary: ["Replace a decision with an accepted successor in", "one transaction"],
+    project: "discover",
+    mutates: true,
+    returnsResult: true,
+    strictOptions: true,
+    enforceArgs: true,
+    args: [{ name: "id", required: true }],
+    optionSchema: [
+      { name: "project" },
+      { name: "path" },
+      { name: "format", values: ["text", "json"] },
+      { name: "dry-run" },
+      { name: "data", required: true }
+    ],
+    examples: ["story decision supersede dec_tense --data successor.json"],
+    run: supersedeDecisionCommand
+  },
+  {
+    name: "issue",
+    path: ["issue", "add"],
+    usage: "issue add --data <json-file>",
+    summary: ["Record an open review issue bound to its evidence"],
+    project: "discover",
+    mutates: true,
+    returnsResult: true,
+    strictOptions: true,
+    enforceArgs: true,
+    optionSchema: [
+      { name: "project" },
+      { name: "path" },
+      { name: "format", values: ["text", "json"] },
+      { name: "dry-run" },
+      { name: "data", required: true }
+    ],
+    examples: ["story issue add --data issue.json"],
+    run: addIssueCommand
+  },
+  {
+    name: "issue",
+    path: ["issue", "list"],
+    usage: "issue list",
+    summary: ["List open issues, including dismissals reopened by", "changed evidence"],
+    project: "discover",
+    mutates: false,
+    returnsResult: true,
+    strictOptions: true,
+    enforceArgs: true,
+    optionSchema: [
+      { name: "project" },
+      { name: "path" },
+      { name: "format", values: ["text", "json"] },
+      { name: "include-inactive" },
+      { name: "record" }
+    ],
+    examples: ["story issue list --record chr_ada"],
+    run: listIssuesCommand
+  },
+  {
+    name: "issue",
+    path: ["issue", "resolve"],
+    usage: "issue resolve <id>",
+    summary: ["Resolve an open issue; --data may give a reason"],
+    project: "discover",
+    mutates: true,
+    returnsResult: true,
+    strictOptions: true,
+    enforceArgs: true,
+    args: [{ name: "id", required: true }],
+    optionSchema: [
+      { name: "project" },
+      { name: "path" },
+      { name: "format", values: ["text", "json"] },
+      { name: "dry-run" },
+      { name: "data" }
+    ],
+    examples: ["story issue resolve issue_eye_colour"],
+    run: resolveIssueCommand
+  },
+  {
+    name: "issue",
+    path: ["issue", "dismiss"],
+    usage: "issue dismiss <id> --data <json-file>",
+    summary: ["Dismiss an open issue for one exact diagnostic code", "against its current evidence"],
+    project: "discover",
+    mutates: true,
+    returnsResult: true,
+    strictOptions: true,
+    enforceArgs: true,
+    args: [{ name: "id", required: true }],
+    optionSchema: [
+      { name: "project" },
+      { name: "path" },
+      { name: "format", values: ["text", "json"] },
+      { name: "dry-run" },
+      { name: "data", required: true }
+    ],
+    examples: ["story issue dismiss issue_eye_colour --data dismissal.json"],
+    run: dismissIssueCommand
   }
 ];
 

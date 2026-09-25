@@ -5,6 +5,9 @@ import { checkContinuity } from "../src/continuity.js";
 import { createStoryProject, scanProject, validateProject } from "../src/story.js";
 import { runCli } from "../src/cli.js";
 import { makeTempDir, memoryIo, writeMarkdown } from "./helpers.js";
+import { applyDismissals } from "../src/memory/issues.js";
+import { biographyFindings } from "../src/state/knowledge.js";
+import { makeProject } from "./support/project.js";
 
 function exemptionProject() {
   const cwd = makeTempDir();
@@ -269,5 +272,62 @@ exemptions:
     const result = validateProject(root);
     expect(result.errors.length).toBeGreaterThan(0);
     expect(result.errors[0]).toContain("continuity/exemptions.md");
+  });
+});
+
+// Story-toolkit projects do not read continuity/exemptions.md. A finding is
+// dismissed only by an issue that names its exact code, exactly its affected
+// ids, and evidence that has not changed since the dismissal.
+describe("story-toolkit exact issue dismissals", () => {
+  async function toolkitProject() {
+    const p = await makeProject();
+    for (const [id, name] of [["chr_ada", "Ada"], ["chr_zoe", "Zoë"]]) {
+      await p.addEntity({ id, type: "character", name });
+      p.write(`characters/${id}.md`, `${p.read(`characters/${id}.md`)}## Later life\n\n${name} eventually leaves.\n`);
+    }
+    return p;
+  }
+
+  test("two identical codes on different records: one dismissal cannot hide the other", async () => {
+    const p = await toolkitProject();
+    await p.addIssue({
+      id: "issue_ada_bio",
+      status: "dismissed",
+      "affected-ids": ["chr_ada"],
+      evidence: [p.fileSource("characters/chr_ada.md")],
+      dismissal: { code: "UNSPLIT_BIOGRAPHY", "record-id": "chr_ada", reason: "Epilogue profile" }
+    });
+    const project = await p.load();
+    const findings = biographyFindings(project);
+    expect(findings.map((item) => item.code)).toEqual(["UNSPLIT_BIOGRAPHY", "UNSPLIT_BIOGRAPHY"]);
+    const applied = applyDismissals(project, findings);
+    expect(applied.dismissed.map((item) => [item.recordIds, item.dismissedBy])).toEqual([[["chr_ada"], "issue_ada_bio"]]);
+    expect(applied.diagnostics.map((item) => item.recordIds)).toEqual([["chr_zoe"]]);
+  });
+
+  test("a substring exemption list is not consulted", async () => {
+    const p = await toolkitProject();
+    p.write("continuity/exemptions.md", "---\ntype: exemption-log\nexemptions:\n  - pattern: \"UNSPLIT\"\n    reason: \"Blanket\"\n---\n");
+    const project = await p.load();
+    const findings = biographyFindings(project);
+    const applied = applyDismissals(project, findings);
+    expect(applied.dismissed).toEqual([]);
+    expect(applied.diagnostics).toEqual(findings);
+  });
+
+  test("a dismissal stops applying once its evidence changes", async () => {
+    const p = await toolkitProject();
+    await p.addIssue({
+      id: "issue_ada_bio",
+      status: "dismissed",
+      "affected-ids": ["chr_ada"],
+      evidence: [p.fileSource("characters/chr_ada.md")],
+      dismissal: { code: "UNSPLIT_BIOGRAPHY", reason: "Epilogue profile" }
+    });
+    p.write("characters/chr_ada.md", `${p.read("characters/chr_ada.md")}Ada later marries.\n`);
+    const project = await p.load();
+    const applied = applyDismissals(project, biographyFindings(project));
+    expect(applied.dismissed).toEqual([]);
+    expect(applied.reopened[0].message).toContain("was dismissed (UNSPLIT_BIOGRAPHY): Epilogue profile");
   });
 });

@@ -22,7 +22,9 @@ export const ID_PREFIX = {
   term: "trm",
   research: "rsc",
   matter: "mtr",
-  fact: "fact"
+  fact: "fact",
+  decision: "dec",
+  issue: "issue"
 };
 
 export const ENTITY_DIRECTORY = {

@@ -3,68 +3,16 @@ import path from "node:path";
 import { FORMAT, SCHEMA_VERSION } from "../contracts.js";
 import { envelope, failure, finding } from "../cli/result.js";
 import { commit, fromStorageError, loadErrorResult, openProject } from "../project/entities.js";
+import { findingsResult, hashRefs, invalid, readData } from "./common.js";
 import { ID_PATTERN, allocateId, uniqueFilename } from "../project/identity.js";
 import { danglingReferenceDiagnostics } from "../project/references.js";
 import { validateRecord } from "../project/schema.js";
 import { parseFrontmatter, replaceFrontmatter, stringifyFrontmatter } from "../storage/document.js";
-import { sourceHash } from "../storage/hash.js";
 import { factEntries, resolveState, summarizeFact } from "../state/facts.js";
 import { validateFact } from "../state/predicates.js";
 
 const NEW_STATUSES = new Set(["proposed", "established"]);
 const RETRACTABLE = new Set(["proposed", "established"]);
-
-function invalid(command, message) {
-  return failure(command, message, "INVALID_INVOCATION", 2);
-}
-
-function findingsResult(command, diagnostics, exitCode) {
-  return {
-    envelope: envelope({ command, ok: false, diagnostics }),
-    exitCode,
-    text: `${diagnostics.map((item) => item.message).join("\n")}\n`
-  };
-}
-
-function readData(command, cwd, dataPath) {
-  let raw;
-  try {
-    raw = fs.readFileSync(path.resolve(cwd, String(dataPath)), "utf8");
-  } catch (error) {
-    return { error: invalid(command, `Cannot read --data ${dataPath}: ${error.message}`) };
-  }
-  let data;
-  try {
-    data = JSON.parse(raw);
-  } catch (error) {
-    return { error: invalid(command, `--data ${dataPath} is not JSON: ${error.message}`) };
-  }
-  if (data === null || typeof data !== "object" || Array.isArray(data)) {
-    return { error: invalid(command, `--data ${dataPath} must hold one JSON object`) };
-  }
-  return { data };
-}
-
-// Sources without a hash are recorded against the current bytes the agent
-// just inspected. A supplied hash must still match; otherwise the evidence
-// changed after it was read.
-function hashSources(command, root, record) {
-  if (!Array.isArray(record.sources)) return null;
-  for (const source of record.sources) {
-    if (!source || typeof source !== "object" || typeof source.path !== "string") continue;
-    let current;
-    try {
-      current = sourceHash(root, { path: source.path, sceneId: source.scene, beatId: source.beat });
-    } catch (error) {
-      return failure(command, `Source ${source.path} cannot be read: ${error.message}`, "SOURCE_UNREADABLE", 1, [record.id]);
-    }
-    if (source.hash === undefined) source.hash = current;
-    else if (source.hash !== current) {
-      return failure(command, `Source ${source.path} no longer matches the supplied hash`, "STALE_SOURCE", 3, [record.id]);
-    }
-  }
-  return null;
-}
 
 /**
  * `fact add --data <json-file>`: validates the record against the fact
@@ -92,7 +40,7 @@ export function addFact(root, options = {}) {
   if (!NEW_STATUSES.has(record.status)) {
     return invalid(command, "A new fact is proposed or established; use fact retract to retire one");
   }
-  const staleOrMissing = hashSources(command, root, record);
+  const staleOrMissing = hashRefs(command, root, record, "sources");
   if (staleOrMissing) return staleOrMissing;
   const schema = validateRecord(record);
   if (schema.length > 0) return findingsResult(command, schema, 2);
