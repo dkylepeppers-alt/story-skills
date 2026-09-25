@@ -5,6 +5,7 @@ import { parseFrontmatter, replaceFrontmatter, stringifyFrontmatter } from "../s
 import { sha256Hex } from "../storage/hash.js";
 import { writeTransactionSync } from "../storage/transaction.js";
 import { loadProjectSync } from "./load.js";
+import { classifyReferences } from "./references.js";
 import { validateRecord } from "./schema.js";
 import {
   ENTITY_DIRECTORY,
@@ -94,6 +95,31 @@ function commit(root, writes, dryRun) {
   return writes.map(publicWrite);
 }
 
+const BLOCKING_LOAD_CODES = new Set([
+  "SCHEMA_VIOLATION",
+  "RECORD_UNPARSEABLE",
+  "RECORD_UNREADABLE",
+  "FORMAT_UNSUPPORTED",
+  "FORMAT_UPSTREAM_V2",
+  "SCHEMA_VERSION_UNSUPPORTED",
+  "DUPLICATE_RECORD_ID",
+  "UNKNOWN_RECORD_TYPE"
+]);
+
+function loadErrorResult(command, project, targetId) {
+  const diagnostics = project.diagnostics.filter((item) => BLOCKING_LOAD_CODES.has(item.code));
+  if (diagnostics.length === 0) return null;
+  if (targetId !== undefined) {
+    const classified = classifyReferences(project, targetId);
+    diagnostics.push(...dependencyDiagnostics(targetId, classified, "refuse"));
+  }
+  return {
+    envelope: envelope({ command, ok: false, diagnostics }),
+    exitCode: 2,
+    text: `${diagnostics.map((item) => item.message).join("\n")}\n`
+  };
+}
+
 function fromStorageError(command, error) {
   const code = error instanceof StorageError ? error.code : "OPERATION_FAILED";
   const exitCode = code === "STALE_SOURCE" || code === "LOCKED" ? 3 : 4;
@@ -121,6 +147,8 @@ export function addEntity(root, options = {}) {
   }
   const opened = openProject(root, command);
   if (opened.error) return opened.error;
+  const blocked = loadErrorResult(command, opened.project);
+  if (blocked) return blocked;
   const used = new Set(opened.project.records.keys());
   let id = options.id === undefined ? null : String(options.id).trim();
   if (id !== null) {
@@ -232,6 +260,8 @@ export function renameEntity(root, id, name, options = {}) {
   if (!id || !nextName) return failure(command, "Usage: story entity rename <id> <name>", "INVALID_INVOCATION", 2);
   const opened = openProject(root, command);
   if (opened.error) return opened.error;
+  const blocked = loadErrorResult(command, opened.project);
+  if (blocked) return blocked;
   const entry = opened.project.records.get(id);
   if (!entry || !ENTITY_DIRECTORY[entry.type]) {
     return failure(command, `No entity with id ${id}`, "ENTITY_NOT_FOUND", 1, [id]);
@@ -285,24 +315,6 @@ export function renameEntity(root, id, name, options = {}) {
   }
 }
 
-function classifyReferences(project, id) {
-  const required = [];
-  const optional = [];
-  for (const entry of project.records.values()) {
-    if (entry.id === id) continue;
-    const record = entry.record;
-    if (record.type === "fact") {
-      const fields = [];
-      if (record.subject === id) fields.push("subject");
-      if (record.value === id) fields.push("value");
-      if (fields.length > 0) required.push({ entry, fields, kind: "fact" });
-    }
-    if (record["chapter-id"] === id) required.push({ entry, fields: ["chapter-id"], kind: "schema" });
-    if (Array.isArray(record.cast) && record.cast.includes(id)) optional.push(entry);
-  }
-  return { required, optional };
-}
-
 function referenceFinding(code, message, recordIds, action, severity = "error") {
   return finding({
     code,
@@ -314,6 +326,49 @@ function referenceFinding(code, message, recordIds, action, severity = "error") 
   });
 }
 
+function dependencyDiagnostics(id, classified, policy) {
+  if (policy === "detach") {
+    return classified.required.map((item) => referenceFinding(
+      "REQUIRED_REFERENCE",
+      item.kind === "fact"
+        ? `Cannot detach ${id}: ${item.entry.id} ${item.fields.join(" and ")} is a required unresolved fact reference`
+        : `Cannot detach ${id}: ${item.entry.id} ${item.fields.join(" and ")} is a required reference`,
+      [id, item.entry.id],
+      item.kind === "fact"
+        ? "Resolve the fact with an explicit reconciliation proposal before removing this entity."
+        : "Reassign or remove the referencing record before deleting this one. Manuscript prose is not rewritten."
+    ));
+  }
+  return [
+    ...classified.required.map((item) => referenceFinding(
+      "REFERENCE_PRESENT",
+      `Refusing to remove ${id}: ${item.entry.id} ${item.fields.join(" and ")} depends on it`,
+      [id, item.entry.id],
+      "Use --policy detach for optional structural references, or reconcile required references first."
+    )),
+    ...classified.optional.map((item) => referenceFinding(
+      "REFERENCE_PRESENT",
+      `Refusing to remove ${id}: ${item.entry.id} ${item.fields.join(" and ")} depends on it`,
+      [id, item.entry.id],
+      "Use --policy detach to clear optional cast or chronology.after references."
+    ))
+  ];
+}
+
+function withoutReference(data, id, fields) {
+  const next = { ...data };
+  if (fields.includes("cast") && Array.isArray(next.cast)) {
+    next.cast = next.cast.filter((value) => value !== id);
+  }
+  if (fields.includes("after") && next.chronology && Array.isArray(next.chronology.after)) {
+    next.chronology = {
+      ...next.chronology,
+      after: next.chronology.after.filter((value) => value !== id)
+    };
+  }
+  return next;
+}
+
 export function removeEntity(root, id, options = {}) {
   const command = "entity remove";
   const policy = options.policy;
@@ -322,26 +377,16 @@ export function removeEntity(root, id, options = {}) {
   }
   const opened = openProject(root, command);
   if (opened.error) return opened.error;
+  const blocked = loadErrorResult(command, opened.project, id);
+  if (blocked) return blocked;
   const entry = opened.project.records.get(id);
   if (!entry || !ENTITY_DIRECTORY[entry.type]) {
     return failure(command, `No entity with id ${id}`, "ENTITY_NOT_FOUND", 1, [id]);
   }
-  const { required, optional } = classifyReferences(opened.project, id);
+  const classified = classifyReferences(opened.project, id);
+  const { required, optional } = classified;
   if (policy === "refuse" && (required.length > 0 || optional.length > 0)) {
-    const diagnostics = [
-      ...required.map((item) => referenceFinding(
-        "REFERENCE_PRESENT",
-        `Refusing to remove ${id}: ${item.entry.id} ${item.fields.join(" and ")} depends on it`,
-        [id, item.entry.id],
-        "Use --policy detach for optional structural references, or reconcile required references first."
-      )),
-      ...optional.map((item) => referenceFinding(
-        "REFERENCE_PRESENT",
-        `Refusing to remove ${id}: ${item.id} cast depends on it`,
-        [id, item.id],
-        "Use --policy detach to clear optional cast references."
-      ))
-    ];
+    const diagnostics = dependencyDiagnostics(id, classified, "refuse");
     return {
       envelope: envelope({ command, ok: false, data: { id, policy }, diagnostics }),
       exitCode: 1,
@@ -349,16 +394,7 @@ export function removeEntity(root, id, options = {}) {
     };
   }
   if (policy === "detach" && required.length > 0) {
-    const diagnostics = required.map((item) => referenceFinding(
-      "REQUIRED_REFERENCE",
-      item.kind === "fact"
-        ? `Cannot detach ${id}: ${item.entry.id} ${item.fields.join(" and ")} is a required unresolved fact reference`
-        : `Cannot detach ${id}: ${item.entry.id} chapter-id is required for a schema-valid scene`,
-      [id, item.entry.id],
-      item.kind === "fact"
-        ? "Resolve the fact with an explicit reconciliation proposal before removing this entity."
-        : "Reassign or remove the scene before deleting this record."
-    ));
+    const diagnostics = dependencyDiagnostics(id, classified, "detach");
     return {
       envelope: envelope({ command, ok: false, data: { id, policy }, diagnostics }),
       exitCode: 3,
@@ -369,14 +405,13 @@ export function removeEntity(root, id, options = {}) {
   const writes = [];
   const detached = [];
   for (const item of optional) {
-    const absolute = path.join(root, item.path);
+    const absolute = path.join(root, item.entry.path);
     const raw = fs.readFileSync(absolute);
     const markdown = raw.toString("utf8");
-    const parsed = parseFrontmatter(markdown, item.path);
-    const cast = parsed.data.cast.filter((value) => value !== id);
-    const content = replaceFrontmatter(markdown, { ...parsed.data, cast });
-    writes.push({ path: slash(item.path), action: "replace", expectedHash: sha256Hex(raw), content });
-    detached.push({ recordId: item.id, field: "cast" });
+    const parsed = parseFrontmatter(markdown, item.entry.path);
+    const content = replaceFrontmatter(markdown, withoutReference(parsed.data, id, item.fields));
+    writes.push({ path: slash(item.entry.path), action: "replace", expectedHash: sha256Hex(raw), content });
+    detached.push({ recordId: item.entry.id, field: item.fields.join(" and ") });
   }
   const entityBytes = fs.readFileSync(path.join(root, entry.path));
   writes.push({ path: slash(entry.path), action: "remove", expectedHash: sha256Hex(entityBytes) });

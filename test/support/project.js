@@ -170,6 +170,7 @@ export async function setRecordField(root, recordId, field, value) {
 
 export async function makeChronologyFixture() {
   const p = await makeProject();
+  await p.addEntity({ id: "obj_brass_key", type: "object", name: "Brass Key" });
   await p.addScene({ id: "scn_opening", title: "Opening" });
   await p.addScene({ id: "scn_aftermath", title: "Aftermath", chronology: { after: ["scn_opening"] } });
   await p.addFact({
@@ -185,6 +186,7 @@ export async function makeChronologyFixture() {
 export async function makeKnowledgeFixture() {
   const p = await makeProject();
   await p.addEntity({ id: "chr_zoe", type: "character", name: "Zoë Voss" });
+  await p.addEntity({ id: "obj_brass_key", type: "object", name: "Brass Key" });
   await p.addScene({ id: "scn_cellar", title: "Cellar" });
   await p.addFact({
     id: "fact_key_handoff",

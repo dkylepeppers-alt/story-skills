@@ -295,7 +295,7 @@ describe("project loading", () => {
     const p = await makeKnowledgeFixture();
     const project = await p.load();
     expect(project.diagnostics).toEqual([]);
-    expect([...project.records.keys()].sort()).toEqual(["chp_one", "chr_zoe", "fact_key_handoff", "prj_00000001", "scn_cellar"]);
+    expect([...project.records.keys()].sort()).toEqual(["chp_one", "chr_zoe", "fact_key_handoff", "obj_brass_key", "prj_00000001", "scn_cellar"]);
     expect(project.records.get("chp_one").path).toBe("chapters/one.md");
     expect(project.records.get("chp_one").hash).toBe(p.hash("chapters/one.md"));
   });
