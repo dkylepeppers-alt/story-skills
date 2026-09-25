@@ -656,7 +656,7 @@ word-count: 1
 
     const raw = fs.readFileSync(chapter.file, "utf8");
     expect(raw).toContain("date: 2026-03-01");
-    expect(raw).toContain(`time: "09:30"`);
+    expect(raw).toContain("time: 09:30");
     const scanned = scanProject(created.root).chapters.find((entry) => entry.id === "chapter-01");
     expect(scanned.date).toBe("2026-03-01");
     expect(scanned.time).toBe("09:30");

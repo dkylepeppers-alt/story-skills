@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/dkylepeppers-alt/story-skills/schemas/asset.schema.json",
+  "title": "Story Toolkit asset record (assets/records/)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "schema-version",
+    "id",
+    "type",
+    "file"
+  ],
+  "properties": {
+    "format": {
+      "const": "story-toolkit"
+    },
+    "schema-version": {
+      "const": 1
+    },
+    "id": {
+      "$ref": "#/$defs/id"
+    },
+    "type": {
+      "const": "asset"
+    },
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "depicts": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "role": {
+      "enum": [
+        "identity",
+        "clothing",
+        "environment",
+        "pose",
+        "composition",
+        "style"
+      ]
+    },
+    "applicable-period": {
+      "type": "object"
+    },
+    "selection": {
+      "type": "string"
+    },
+    "source": {
+      "$ref": "#/$defs/source-ref"
+    },
+    "extensions": {
+      "type": "object"
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]*$"
+    },
+    "source-ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "hash",
+        "kind"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "scene": {
+          "type": "string"
+        },
+        "beat": {
+          "type": "string"
+        },
+        "hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "kind": {
+          "enum": [
+            "manuscript",
+            "author-decision",
+            "research",
+            "asset"
+          ]
+        }
+      }
+    },
+    "cursor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scene",
+        "side"
+      ],
+      "properties": {
+        "scene": {
+          "type": "string"
+        },
+        "beat": {
+          "type": "string"
+        },
+        "side": {
+          "enum": [
+            "before",
+            "after"
+          ]
+        }
+      }
+    },
+    "cursor-or-baseline": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "baseline"
+        },
+        {
+          "$ref": "#/$defs/cursor"
+        }
+      ]
+    }
+  }
+}

@@ -29,7 +29,7 @@ Body`);
     expect(parsed.raw).toContain("name:");
   });
 
-  test("parses bare keys with no value as empty strings", () => {
+  test("parses bare keys with no value as null", () => {
     const parsed = parseFrontmatter(`---
 introduced:
 aliases: []
@@ -37,7 +37,7 @@ resolved:
 ---
 Body`);
 
-    expect(parsed.data).toEqual({ introduced: "", aliases: [], resolved: "" });
+    expect(parsed.data).toEqual({ introduced: null, aliases: [], resolved: null });
   });
 
   test("round-trips scalars containing quotes and numeric-looking strings", () => {
@@ -55,15 +55,16 @@ Body`);
     expect(again.data).toEqual(original);
   });
 
-  test("strips quotes from hand-written values that are not valid JSON", () => {
+  test("parses quoted values and rejects invalid YAML instead of guessing", () => {
     const parsed = parseFrontmatter(`---
-bad: "a\\qb"
 single: 'The Lost Heir'
-tiny: "
+escaped: "line\\nbreak"
 ---
 Body`);
 
-    expect(parsed.data).toEqual({ bad: "a\\qb", single: "The Lost Heir", tiny: '"' });
+    expect(parsed.data).toEqual({ single: "The Lost Heir", escaped: "line\nbreak" });
+    expect(() => parseFrontmatter('---\nbad: "a\\qb"\n---\nBody')).toThrow(/Invalid escape sequence/);
+    expect(() => parseFrontmatter('---\ntiny: "\n---\nBody')).toThrow(/Missing closing .quote/);
   });
 
   test("stringifies and replaces frontmatter", () => {
@@ -94,28 +95,28 @@ Body`);
     expect(twice).toBe(once);
   });
 
-  test("rejects missing or unsupported frontmatter", () => {
+  test("rejects missing, non-mapping, or unanchored frontmatter", () => {
     expect(() => parseFrontmatter("Body", "body.md")).toThrow("body.md is missing YAML frontmatter");
-    expect(() => parseFrontmatter("---\n  nope\n---\n")).toThrow("Unsupported frontmatter line");
+    expect(() => parseFrontmatter("---\n  nope\n---\n")).toThrow("frontmatter must be a YAML mapping");
     expect(() => replaceFrontmatter("Body", { title: "Nope" })).toThrow("Cannot replace missing YAML frontmatter");
   });
 
   test("rejects duplicate top-level keys instead of overwriting", () => {
     expect(() => parseFrontmatter("---\ntitle: A\ntitle: B\n---\nBody")).toThrow(
-      "Duplicate frontmatter key: title"
+      "Duplicate frontmatter key"
     );
     expect(() => parseFrontmatter("---\ntags:\n  - a\ntags:\n  - b\n---\nBody")).toThrow(
-      "Duplicate frontmatter key: tags"
+      "Duplicate frontmatter key"
     );
     expect(() => parseFrontmatter("---\ntitle: A\ntitle:\n  - b\n---\nBody")).toThrow(
-      "Duplicate frontmatter key: title"
+      "Duplicate frontmatter key"
     );
   });
 
   test("rejects duplicate keys inside list objects", () => {
     expect(() =>
       parseFrontmatter("---\nrelationships:\n  - character: a\n    character: b\n---\nBody")
-    ).toThrow("Duplicate frontmatter key: character");
+    ).toThrow("Duplicate frontmatter key");
   });
 
   test("tolerates a UTF-8 BOM before the opening delimiter", () => {
@@ -161,8 +162,10 @@ Body`);
     expect(parsed.data.f).toBe("plain");
   });
 
-  test("rejects empty mappings instead of crashing on entries[0]", () => {
-    expect(() => stringifyFrontmatter({ tags: [{}] })).toThrow("Cannot stringify empty mapping in tags");
+  test("stringifies empty mappings as {} and round-trips them", () => {
+    const yaml = stringifyFrontmatter({ tags: [{}] });
+    expect(yaml).toContain("  - {}");
+    expect(parseFrontmatter(`${yaml}Body`).data.tags).toEqual([{}]);
   });
 
   test("parses __proto__ keys as own data without polluting prototypes", () => {
@@ -236,15 +239,18 @@ Body`);
 
     const removed = replaceFrontmatter(markdown, { ...data, items: [data.items[2]], version: undefined });
     expect(removed).toContain("items:\n  - id: b\n    weight: 2.50\n");
-    expect(removed).toContain("version: \n");
+    expect(removed).not.toContain("version:");
     const { version, ...withoutVersion } = data;
     expect(replaceFrontmatter(markdown, withoutVersion)).not.toContain("version");
   });
 
-  test("stringifies nested empty lists as [] and rejects nested non-empty lists", () => {
+  test("stringifies nested lists of any depth", () => {
     const yaml = stringifyFrontmatter({ items: [{ id: "a", tags: [] }, []] });
     expect(yaml).toContain("    tags: []\n  - []\n");
     expect(parseFrontmatter(`${yaml}Body`).data.items).toEqual([{ id: "a", tags: [] }, []]);
-    expect(() => stringifyFrontmatter({ items: [{ id: "a", tags: ["x"] }] })).toThrow("nested non-empty list");
+
+    const nested = stringifyFrontmatter({ items: [{ id: "a", tags: ["x"] }] });
+    expect(parseFrontmatter(`${nested}Body`).data.items[0].tags).toEqual(["x"]);
+    expect(nested).toContain("    tags:\n      - x\n");
   });
 });

@@ -56,5 +56,9 @@
     "url": "git+https://github.com/dkylepeppers-alt/story-skills.git"
   },
   "license": "MIT",
-  "devDependencies": {}
+  "devDependencies": {},
+  "dependencies": {
+    "ajv": "^8.20.0",
+    "yaml": "^2.9.1"
+  }
 }

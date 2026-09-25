@@ -1,0 +1,147 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/dkylepeppers-alt/story-skills/schemas/scene.schema.json",
+  "title": "Story Toolkit scene record (scenes/)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "schema-version",
+    "id",
+    "type",
+    "chapter-id"
+  ],
+  "properties": {
+    "format": {
+      "const": "story-toolkit"
+    },
+    "schema-version": {
+      "const": 1
+    },
+    "id": {
+      "$ref": "#/$defs/id"
+    },
+    "type": {
+      "const": "scene"
+    },
+    "chapter-id": {
+      "type": "string"
+    },
+    "title": {
+      "type": "string"
+    },
+    "reading-order": {
+      "type": "integer"
+    },
+    "chronology": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "date": {
+          "type": "string"
+        },
+        "time": {
+          "type": "string"
+        }
+      }
+    },
+    "cast": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "moment-ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/source-ref"
+      }
+    },
+    "extensions": {
+      "type": "object"
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]*$"
+    },
+    "source-ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "hash",
+        "kind"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "scene": {
+          "type": "string"
+        },
+        "beat": {
+          "type": "string"
+        },
+        "hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "kind": {
+          "enum": [
+            "manuscript",
+            "author-decision",
+            "research",
+            "asset"
+          ]
+        }
+      }
+    },
+    "cursor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scene",
+        "side"
+      ],
+      "properties": {
+        "scene": {
+          "type": "string"
+        },
+        "beat": {
+          "type": "string"
+        },
+        "side": {
+          "enum": [
+            "before",
+            "after"
+          ]
+        }
+      }
+    },
+    "cursor-or-baseline": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "baseline"
+        },
+        {
+          "$ref": "#/$defs/cursor"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/dkylepeppers-alt/story-skills/schemas/shot.schema.json",
+  "title": "Story Toolkit shot package (shots/)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "schema-version",
+    "id",
+    "type",
+    "prompt"
+  ],
+  "properties": {
+    "format": {
+      "const": "story-toolkit"
+    },
+    "schema-version": {
+      "const": 1
+    },
+    "id": {
+      "$ref": "#/$defs/id"
+    },
+    "type": {
+      "const": "shot"
+    },
+    "prompt": {
+      "type": "string",
+      "minLength": 1
+    },
+    "references": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "asset",
+          "role"
+        ],
+        "properties": {
+          "asset": {
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "identity",
+              "clothing",
+              "environment",
+              "pose",
+              "composition",
+              "style"
+            ]
+          },
+          "order": {
+            "type": "integer"
+          }
+        }
+      }
+    },
+    "scene-id": {
+      "type": "string"
+    },
+    "beat-id": {
+      "type": "string"
+    },
+    "source-hashes": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$"
+      }
+    },
+    "options": {
+      "type": "object"
+    },
+    "unresolved-facts": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "provider-profile": {
+      "type": "string"
+    },
+    "extensions": {
+      "type": "object"
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]*$"
+    },
+    "source-ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "hash",
+        "kind"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "scene": {
+          "type": "string"
+        },
+        "beat": {
+          "type": "string"
+        },
+        "hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "kind": {
+          "enum": [
+            "manuscript",
+            "author-decision",
+            "research",
+            "asset"
+          ]
+        }
+      }
+    },
+    "cursor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scene",
+        "side"
+      ],
+      "properties": {
+        "scene": {
+          "type": "string"
+        },
+        "beat": {
+          "type": "string"
+        },
+        "side": {
+          "enum": [
+            "before",
+            "after"
+          ]
+        }
+      }
+    },
+    "cursor-or-baseline": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "baseline"
+        },
+        {
+          "$ref": "#/$defs/cursor"
+        }
+      ]
+    }
+  }
+}

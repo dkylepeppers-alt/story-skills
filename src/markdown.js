@@ -1,3 +1,5 @@
+import { stripMarkers } from "./storage/spans.js";
+
 export function kebabCase(value) {
   return String(value)
     .normalize("NFKD")
@@ -19,7 +21,7 @@ export function titleCaseSlug(slug) {
 const WORD_PATTERN = /[\p{L}\p{N}]+(?:['\u2019-][\p{L}\p{N}]+)*/gu;
 
 export function splitWords(markdown) {
-  const normalized = String(markdown)
+  const normalized = stripMarkers(String(markdown))
     .replace(/```[\s\S]*?```/g, " ")
     .replace(/`[^`]*`/g, " ")
     // Drop images; keep a link's visible text and drop only its target.

@@ -307,7 +307,7 @@ describe("cli", () => {
     expect(added.code).toBe(0);
     const raw = fs.readFileSync(path.join(root, "chapters", "chapter-01.md"), "utf8");
     expect(raw).toContain("date: 2026-03-01");
-    expect(raw).toContain(`time: "09:30"`);
+    expect(raw).toContain("time: 09:30");
   });
 
   test("runs init, validate, wordcount, reindex, links, and export commands", () => {

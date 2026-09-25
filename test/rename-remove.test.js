@@ -150,7 +150,7 @@ knowledge-state:
     createEntity(root, { kind: "location", name: "Citadel", character: "lord-maren" });
     createEntity(root, { kind: "artifact", name: "Crown", owner: "lord-maren" });
     fs.mkdirSync(path.join(root, "notes"));
-    fs.writeFileSync(path.join(root, "notes", "aaa.md"), "---\nmeta:\n  nested: yes\n---\n", "utf8");
+    fs.writeFileSync(path.join(root, "notes", "aaa.md"), '---\nmeta: "bad \\q escape"\n---\n', "utf8");
     const before = snapshot(root);
 
     expect(() => renameEntity(root, { kind: "character", id: "lord-maren", name: "Maren Two" })).toThrow("nothing was changed");
