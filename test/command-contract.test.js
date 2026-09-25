@@ -7,7 +7,7 @@ import { createStoryProject } from "../src/story.js";
 import { makeTempDir, memoryIo } from "./helpers.js";
 
 const UNIMPLEMENTED = [
-  "snapshot", "reconcile",
+  "reconcile",
   "assets", "shots", "setup", "installation"
 ];
 
@@ -73,11 +73,11 @@ describe("command result contract", () => {
     expect(optionEnvelope.diagnostics[0].code).toBe("INVALID_INVOCATION");
     expect(optionEnvelope.diagnostics[0].message).toContain("Unknown option");
 
-    const unknown = invoke(cwd, ["snapshot", "--format", "json"]);
+    const unknown = invoke(cwd, ["reconcile", "--format", "json"]);
     const unknownEnvelope = assertSingleEnvelope(unknown, 2, false);
-    expect(unknownEnvelope.command).toBe("snapshot");
+    expect(unknownEnvelope.command).toBe("reconcile");
     expect(unknownEnvelope.ok).toBe(false);
-    expect(unknownEnvelope.diagnostics[0].message).toContain("Unknown command: snapshot");
+    expect(unknownEnvelope.diagnostics[0].message).toContain("Unknown command: reconcile");
     expect(unknown.out.startsWith("{")).toBe(true);
     expect(unknown.out.endsWith("}")).toBe(true);
   });

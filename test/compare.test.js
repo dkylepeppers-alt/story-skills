@@ -44,10 +44,12 @@ function gitProject({ subdir = "book" } = {}) {
 
 describe("story compare", () => {
   test("compares with a git ref when the project is in a subdirectory", () => {
-    const { root } = gitProject();
+    const { root, repo } = gitProject();
+    const commit = git(repo, "rev-parse", "draft-1^{commit}").trim();
     const result = compareProject(root, { ref: "draft-1" });
 
-    expect(result.label).toBe("git ref draft-1");
+    expect(result.label).toBe(`git ref draft-1 (commit ${commit.slice(0, 12)})`);
+    expect(result.baseline).toEqual({ kind: "git", ref: "draft-1", commit });
     expect(result.beforeChapters).toBe(3);
     expect(result.afterChapters).toBe(3);
     expect(result.chapters.map((chapter) => [chapter.id, chapter.status])).toEqual([
@@ -66,17 +68,28 @@ describe("story compare", () => {
     expect(compareProject(root, { ref: "HEAD" }).chapters.find((chapter) => chapter.id === "chapter-04").status).toBe("added");
   });
 
-  test("compares with another copy of the project", () => {
-    const { root } = gitProject();
-    const copy = path.join(makeTempDir(), "copy");
-    fs.cpSync(root, copy, { recursive: true });
-    writeChapter(copy, 4, "A different ending entirely.");
-    const result = invoke(path.dirname(copy), ["compare", "--path", root, "--against", "copy"]);
+  test("compares with an explicit snapshot, with or without Git", () => {
+    const parent = makeTempDir();
+    const root = path.join(parent, "book");
+    createStoryProject({ cwd: parent, title: "Snapshot Story", dir: root, force: false });
+    writeChapter(root, 1, "First paragraph.\n\nSecond paragraph.");
+    writeChapter(root, 4, "A new ending.");
+    expect(invoke(root, ["snapshot", "draft-1"]).code).toBe(0);
+    writeChapter(root, 4, "A different ending entirely.");
 
+    const result = invoke(parent, ["compare", "--path", root, "--ref", "snapshot:draft-1"]);
     expect(result.code).toBe(0);
-    expect(result.out).toContain(`Compared with ${copy}`);
-    expect(result.out).toContain("- chapter-04 Chapter 4: 4 -> 3 words (-1), 0% of paragraphs unchanged");
-    expect(result.out).toContain("- chapter-01 Chapter One: unchanged (9 words)");
+    expect(result.out).toMatch(/^Compared with snapshot draft-1 \(hash [0-9a-f]{12}\)\n/);
+    expect(result.out).toContain("- chapter-04 Chapter 4: 3 -> 4 words (+1), 0% of paragraphs unchanged");
+    expect(result.out).toContain("- chapter-01 Chapter 1: unchanged (4 words)");
+    expect(compareProject(root, { ref: "draft-1" }).baseline.kind).toBe("snapshot");
+  });
+
+  test("--against is no longer an option: folder copies are not immutable baselines", () => {
+    const { root } = gitProject();
+    const result = invoke(root, ["compare", "--against", "copy"]);
+    expect(result.code).toBe(2);
+    expect(result.err).toContain("Unknown option --against");
   });
 
   test("the CLI prints the git comparison", () => {
@@ -91,21 +104,28 @@ describe("story compare", () => {
     expect(result.err).toContain("Comparison complete: 0 errors");
   });
 
-  test("rejects missing or doubled sources, bad refs, non-repositories, and unreadable copies", () => {
-    const { root } = gitProject();
-    expect(() => compareProject(root, {})).toThrow("compare needs exactly one of --ref <git-ref> or --against <project-path>");
-    expect(() => compareProject(root, { ref: "HEAD", against: "x" })).toThrow("exactly one");
-    expect(() => compareProject(root, { ref: "--output=x" })).toThrow("Unsupported git ref: --output=x");
-    expect(() => compareProject(root, { ref: "no-such-tag" })).toThrow("Unknown git ref: no-such-tag");
+  test("rejects a missing ref, bad refs, ambiguous refs, non-repositories and corrupt snapshots", () => {
+    const { root, repo } = gitProject();
+    expect(() => compareProject(root, {})).toThrow("compare needs --ref <git-ref-or-snapshot>");
+    expect(() => compareProject(root, { ref: "--output=x" })).toThrow("Unsupported baseline \"--output=x\"");
+    expect(() => compareProject(root, { ref: "no-such-tag" })).toThrow("No snapshot or Git commit named no-such-tag");
+    expect(invoke(root, ["compare", "--ref", "no-such-tag"]).code).toBe(2);
+
+    git(repo, "branch", "draft-1");
+    const ambiguous = invoke(root, ["compare", "--ref", "draft-1", "--format", "json"]);
+    expect(ambiguous.code).toBe(2);
+    expect(JSON.parse(ambiguous.out).diagnostics[0].code).toBe("REF_AMBIGUOUS");
+    expect(invoke(root, ["compare", "--ref", "refs/tags/draft-1"]).code).toBe(0);
 
     const plain = makeTempDir();
     createStoryProject({ cwd: plain, title: "Plain", force: false });
-    expect(() => compareProject(path.join(plain, "plain"), { ref: "HEAD" })).toThrow("compare --ref needs the project inside a git repository");
+    expect(() => compareProject(path.join(plain, "plain"), { ref: "HEAD" })).toThrow("is not inside a Git repository");
 
-    const broken = path.join(makeTempDir(), "broken");
-    fs.cpSync(root, broken, { recursive: true });
-    fs.writeFileSync(path.join(broken, "chapters", "chapter-09.md"), "no frontmatter", "utf8");
-    expect(() => compareProject(root, { against: broken })).toThrow(`Cannot read ${broken}: chapters/chapter-09.md`);
+    expect(invoke(root, ["snapshot", "kept"]).code).toBe(0);
+    fs.writeFileSync(path.join(root, ".story/revisions/kept/files/story.md"), "tampered\n");
+    const corrupt = invoke(root, ["compare", "--ref", "snapshot:kept"]);
+    expect(corrupt.code).toBe(3);
+    expect(corrupt.err).toContain("Snapshot kept is corrupt");
   });
 });
 

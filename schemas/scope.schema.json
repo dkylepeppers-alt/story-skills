@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/dkylepeppers-alt/story-skills/schemas/scope.schema.json",
   "title": "Story Toolkit scope specification",
-  "$comment": "A ScopeSpec names files and exact allowed source ranges against a baseline hash.",
+  "$comment": "A ScopeSpec names files and exact allowed source ranges against a baseline hash. Ranges are half-open UTF-8 byte ranges [start, end) of the baseline file and must fall on character boundaries. Boundary rule: a range owns both boundaries, so an edit may insert text at start or at end; replacing a range's bytes can always be written as an insertion at its start, so no narrower rule is observable. An empty range [p, p) permits insertion at p only. Overlapping and touching ranges merge. A file listed without ranges may change freely, including deletion; ranges: [] allows no change. Changed files the scope does not list are out of scope. A file new since the baseline is listed with the SHA-256 of empty content.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -38,7 +38,8 @@
           },
           "baseline-hash": {
             "type": "string",
-            "pattern": "^[0-9a-f]{64}$"
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "SHA-256 hex of the file's bytes in the baseline revision; the empty-content hash for a file new since the baseline."
           },
           "ranges": {
             "type": "array",
@@ -59,7 +60,22 @@
                   "minimum": 0
                 }
               }
-            }
+            },
+            "description": "Allowed half-open UTF-8 byte ranges [start, end) of the baseline file. Each range owns both boundaries (insertion at start or end is allowed); an empty range is one insertion point. Omit to allow any change to the file, including deletion."
+          },
+          "markers": {
+            "description": "Whether an edit may add, remove or rename <!-- story-scene --> and <!-- story-beat --> markers inside its ranges. Default locked.",
+            "enum": [
+              "locked",
+              "editable"
+            ]
+          },
+          "restriction": {
+            "description": "The author's restriction for a dialogue edit. dialogue: quoted content only; dialogue-and-tags: quoted content plus speech tags and action beats. Advisory only: quote detection may warn about a change, but the ranges decide the scope.",
+            "enum": [
+              "dialogue",
+              "dialogue-and-tags"
+            ]
           }
         }
       }

@@ -33,7 +33,7 @@ Baseline source of truth: `src/commands.js` (23 commands, help order).
 | `links` | Cross-reference and backlink checks | Retained | 10 | `test/diagnostics.test.js` |
 | `continuity` | Deaths, promises/payoffs, questions, casts, durable state; exemptions | Retained for schema v2 (story-toolkit projects replace substring exemptions with exact issue dismissals, Task 6) | 10 | `test/continuity.test.js`, `test/custody-time.test.js`, `test/clue.test.js`, `test/exemptions.test.js` |
 | `knowledge` | What a character knew at a chapter (`--at`) | Adapted (story-toolkit projects use `--scene`/`--beat`/`--side` cursors and return knows, believes, and unresolved items; schema v2 keeps `--at`; usage errors exit 2 under the shared exit codes) | 5 | `test/knowledge.test.js`, `test/knowledge-errors.test.js`, `test/state.test.js` |
-| `compare` | Compare with an earlier draft: word changes, added/removed chapters, unchanged paragraphs | Adapted (stable-ID matching, scopes, snapshots; `--against` folder baseline intentionally removed, see §7) | 8 | `test/compare.test.js`, `test/changes.test.js`, `test/scope.test.js` |
+| `compare` | Compare with an earlier draft: word changes, added/removed chapters, unchanged paragraphs | Adapted. Task 8: `--ref` reads a Git commit or an explicit snapshot (`snapshot:<name>`) through the shared baseline reader, and the label names the resolved commit or snapshot hash; stable-ID matching and scopes are `story changes`; `--against` folder baseline intentionally removed, see §7 | 8 | `test/compare.test.js`, `test/changes.test.js`, `test/scope.test.js` |
 | `progress` | Words vs targets/deadline; `--log` records the session | Retained | 10 | `test/progress.test.js` |
 | `timeline` | Story-time order, POV balance, character presence | Adapted (partial-order chronology; `unordered` is explicit) | 4 | `test/timeline.test.js`, `test/custody-time.test.js`, `test/chronology.test.js` |
 | `prose` | Prose lint: filter words, adverbs, echoes, rhythm, similar names, style sheet | Retained (advisory and configurable, never a quality score) | 10 | `test/prose.test.js` |
@@ -56,7 +56,8 @@ status|update|remove`, `context`, `entity …`, `check --only`, `snapshot`,
 by the design's command matrix; they are additions, not ledger dispositions.
 Task 3 registers `entity add|rename|remove|show`, Task 5 registers
 `fact add|list|retract`, Task 6 registers `decision add|list|supersede`
-and `issue add|list|resolve|dismiss`, and Task 7 registers `context`.
+and `issue add|list|resolve|dismiss`, Task 7 registers `context`, and
+Task 8 registers `snapshot` and `changes`.
 The other names above are not registered and fail as unknown commands
 (`test/command-contract.test.js`).
 
@@ -185,11 +186,49 @@ reason and sources, then impact material, omissions and diagnostics. An
 invalid request exits 2 and writes nothing. A missing target or include, or
 required material that cannot fit, exits 1 with its findings. A project with
 unreadable records exits 2, as `knowledge` does.
+Task 8 adds revision baselines and scope checks in `src/changes/`.
+`resolveBaseline` (`baseline.js`) reads a Git baseline with read-only Git
+plumbing (`rev-parse`, `ls-tree`, `cat-file`, `ls-files`), so the working
+tree, index and refs are untouched. The ref resolves to a commit, and the
+commit is stored in the result. A ref that names both a branch and a tag, or
+a short hash with several matches, is refused as `REF_AMBIGUOUS` with the full
+names to choose from. `createSnapshot` (`snapshot.js`) writes an explicit
+snapshot to `.story/revisions/<name>/`: a timestamp-free manifest of path,
+SHA-256 and size, plus byte-exact copies. The manifest hash names the
+snapshot, an existing name is refused, and reading verifies every hash
+(`SNAPSHOT_CORRUPT` otherwise). Nothing creates a snapshot implicitly.
+`git:<ref>` and `snapshot:<name>` are explicit; a bare name must match exactly
+one. `compareRevision` (`compare.js`) matches records and scenes by id. Add,
+remove, content change and move are separate classes, so a renamed file is a
+move and a scene moved to another chapter with identical span bytes is not a
+rewrite. It also reports changed facts by field, and source references whose
+evidence was removed (`SOURCE_REMOVED`, error) or changed since the baseline
+(`STALE_EVIDENCE`, warning), plus references left dangling by removals.
+`checkScope` / `checkScopeSpec` (`scope.js`) enforce a ScopeSpec: half-open
+UTF-8 byte ranges against a baseline hash, each owning both boundaries, with
+scene and beat markers locked unless declared editable. Violations are
+`EDIT_OUT_OF_SCOPE` errors with before/after byte spans; nothing is
+rewritten. `dialogueCandidates` offers quoted-content and tag-or-beat ranges
+as advice only; the caller's declared ranges decide.
+`story snapshot <name> [--dry-run]` writes that snapshot (exit 1 if the
+name exists, 2 for an invalid name). It runs in any directory with a
+`story.md`, including schema v2 projects, so `compare` can use it.
+`story changes --since <git-ref-or-snapshot> [--scope <json-file>]` returns
+the ChangeReport (`data`) and never writes. It reads story-toolkit projects
+only. It exits 1 on error findings (out-of-scope edits, removed evidence),
+2 for an unreadable or invalid scope or an unknown, ambiguous or malformed
+baseline, 3 when a scope's baseline hash or a snapshot copy no longer
+matches, and 4 when Git itself fails. Stale evidence is a warning and
+exits 0. Schema v2 `compare --ref` now reads its baseline through the same
+resolver: a Git commit or a snapshot, never a copied folder (`--against` is
+gone). Its label names the resolved commit or snapshot hash, and baseline
+failures use the same exit codes (2 unknown, ambiguous or malformed, 3
+corrupt snapshot, 4 Git failure) instead of the former blanket 1.
 
 ## 2. CLI options
 
 Baseline source of truth: `src/options.js` (68 registered options: 60 with
-help, 8 undocumented aliases, plus the Task 3, 5, 6 and 7 flags below). The new option set
+help, 8 undocumented aliases, plus the Task 3, 5, 6, 7 and 8 flags below). The new option set
 is specified by the design (`--format text|json`, `--project`, `--dry-run`,
 structured `--data`); this section records where each baseline option's
 behavior lands. `--format text|json` selects the result envelope. Build kinds
@@ -201,18 +240,19 @@ them to `--kind`.
 | Project selection | `--path` | Retained. `--project` is a new alias. Only `project: discover` commands walk parents for `story.md`; legacy commands stay on the flag, positional path, or cwd | 3 | `test/command-contract.test.js`, `test/registry.test.js` |
 | Creation | `--title --dir --genre --sub-genre --setting-era --theme --themes --pov --tense --synopsis --series --book-number --follows --precedes --force` | Adapted | 3 | `test/project.test.js`, `test/init-add-safety.test.js` |
 | Maintenance | `--write --log --date` | Retained | 10 | `test/progress.test.js`, `test/story.test.js` |
-| Comparison | `--ref --against` | Adapted (git refs retained; `--against` removed, see §7) | 8 | `test/compare.test.js`, `test/changes.test.js` |
+| Comparison | `--ref --against` | Adapted (`--ref` takes a git ref or `snapshot:<name>`; `--against` removed and now an unknown option, see §7) | 8 | `test/compare.test.js`, `test/changes.test.js` |
 | Output | `--out --format --shunn --pages --actionable` | Adapted. `--format text\|json` selects the result envelope; `markdown\|epub\|docx\|shunn` stay build kinds until Task 12 `--kind` | 3, 10, 12 | `test/publishing.test.js`, `test/command-contract.test.js` |
 | Knowledge | `--at` | Adapted (story-toolkit projects use the `--scene --beat --side` cursor; `--at` stays for schema v2 projects and is an invalid invocation on story-toolkit projects) | 5 | `test/knowledge.test.js`, `test/knowledge-errors.test.js` |
 | Entity fields | `--number --chapter --scene --type --role --status --mode --date --time --travel-hours --dilemma --sequel --location(s) --character(s) --mention(s) --member(s) --owner --arc(s) --introduced --resolved --planted --payoff --significance-delayed --category --alias(es) --region --population --controlled-by --prevalence --acts --placement --order --source(s) --used-in` | Adapted (schema-validated `--data <json-file>` mutations become the primary contract; per-design §9) | 3, 5, 6, 13 | `test/project.test.js`, `test/state.test.js`, `test/memory.test.js`, `test/assets.test.js` |
 | Undocumented aliases | `--locations --characters --mentions --members --arcs --aliases --act --sources` | Intentionally removed once schema v2 `add` is replaced (undocumented convenience aliases; behavior replaced by repeatable documented forms and `--data`). Task 3 still accepts them because v2 `add` and `test/cli.test.js` use them | 3 | `test/cli.test.js` |
 | Global (new) | `--help/-h --version/-v` | Retained. `--help` and `--version` stay plain text even when `--format json` is present | 3 | `test/registry.test.js`, `test/command-contract.test.js` |
 | Result envelope (new) | `--format text\|json` | Stdout is one JSON result object when the value is `json`; logs stay on stderr. `text` is the plain result | 3 | `test/command-contract.test.js` |
-| Mutation preview (new) | `--dry-run` | Added in Task 3 for fork init, import, and entity mutations; Task 5 adds `fact add` and `fact retract`; Task 6 adds decision and issue mutations | 3, 5, 6 | `test/project.test.js`, `test/state.test.js`, `test/memory.test.js` |
+| Mutation preview (new) | `--dry-run` | Added in Task 3 for fork init, import, and entity mutations; Task 5 adds `fact add` and `fact retract`; Task 6 adds decision and issue mutations; Task 8 adds `snapshot` | 3, 5, 6, 8 | `test/project.test.js`, `test/state.test.js`, `test/memory.test.js`, `test/changes.test.js` |
 | Removal policy (new) | `--policy refuse\|detach` | Added in Task 3 for `entity remove` | 3 | `test/rename-remove.test.js` |
 | Structured data (new) | `--data <json-file>` | Added in Task 5 for `fact add`; Task 6 adds `decision add`, `decision supersede`, `issue add`, `issue resolve`, and `issue dismiss` | 5, 6 | `test/state.test.js`, `test/memory.test.js` |
 | Story cursor (new) | `--scene <n\|id> --beat <id> --side before\|after` | Task 5 `fact list` and `knowledge` cursor; Task 7 `context` target or reading boundary. `--scene` still takes a scene number for schema v2 `add`; `--side` defaults to `before` | 5, 7 | `test/state.test.js`, `test/context.test.js` |
 | Context request (new) | `--task --audience writer\|reader --constraint --include --max-bytes` | Added in Task 7 for `context`. `--constraint` and `--include` are repeatable; `--max-bytes` defaults to 48000 | 7 | `test/context.test.js` |
+| Revision baseline (new) | `--since <git-ref-or-snapshot> --scope <json-file>` | Added in Task 8 for `changes`. `git:` and `snapshot:` prefixes are explicit; a bare name must match exactly one | 8 | `test/changes.test.js` |
 | Inactive records (new) | `--include-inactive --include-work` | Added in Task 5 for `fact list`. Listing never makes an inactive or `work/` record apply at a cursor. Task 6 adds `--include-inactive` to `decision list` and `issue list` | 5, 6 | `test/state.test.js`, `test/memory.test.js` |
 | Record scope (new) | `--record <id>` | Added in Task 6 for `decision list` and `issue list` | 6 | `test/memory.test.js` |
 | Fork selector (new) | `--toolkit` | Added in Task 3. Selects story-toolkit `init` and `import` | 3 | `test/project.test.js`, `test/command-contract.test.js` |
@@ -323,7 +363,7 @@ is superseded or intentionally removed.
 | Copied fallback binary `skills/story-maintenance/scripts/story.js` (+ `build:fallback`, `check:fallback`, `check:node-help`) | Shipping a second executable inside a skill duplicates the CLI and drifts from the package; the toolkit ships one CLI | Packaged CLI (`dist/story.js` + `bin/story.js` entrypoint) installed from the fork release; Task 17 tests: `test/skill-build.test.js`, `test/package-smoke.test.js` |
 | Marketplace plugin distribution (`.claude-plugin/`, `.codex-plugin/`, `.agents/` as install channels; `plugins/story-skills` symlink) | One owned distribution replaces multi-marketplace installs | `story setup` / release tarball installation (Tasks 17–19); identity fields remain aligned in the interim (`test/identity.test.js`) |
 | Hidden undocumented option aliases (`--characters`, `--locations`, `--mentions`, `--members`, `--aliases`, `--arcs`, `--act`, `--sources`) | Undocumented convenience aliases; the new contract prefers documented repeatable forms and schema-validated `--data` | Documented repeatable options and `--data <json-file>` mutations (Task 3 onward); `test/command-contract.test.js` |
-| `compare --against <folder>` baseline | Copied-project-folder baselines are not immutable; snapshots are explicit and hashed | `story snapshot` + `.story/revisions/` baselines (Task 8); `test/changes.test.js` |
+| `compare --against <folder>` baseline | Copied-project-folder baselines are not immutable; snapshots are explicit and hashed | `story snapshot` + `.story/revisions/` baselines, read by `compare --ref` and `changes --since` (Task 8); `test/compare.test.js`, `test/changes.test.js` |
 | `build --format shunn` + separate `--shunn` flag | Overloaded option; kind is one concept | `build --kind shunn-md\|shunn-docx` (Task 12); `test/shunn.test.js`, `test/shunn-docx.test.js` |
 | `story-maintenance` as a standalone skill | Its deterministic checks are CLI capabilities, not a creative skill | `story-workflow` routes to the CLI; all checks retained (Task 10); `test/diagnostics.test.js` |
 | Sixteen baseline skill IDs as shipped entry points | Consolidated into ten skills; duplicate triggers must not ship | Ten-skill map in §3 (Task 16); `test/skill-contract.test.js` |

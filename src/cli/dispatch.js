@@ -1,4 +1,5 @@
 import path from "node:path";
+import { BaselineError } from "../changes/snapshot.js";
 import { COMMANDS } from "../commands.js";
 import { StorageError } from "../contracts.js";
 import { formatOptionsHelp, isTruthy, parseArgs } from "../options.js";
@@ -243,6 +244,9 @@ export function runCli(argv, io) {
 
 function classifyThrown(error) {
   const message = error instanceof Error ? error.message : String(error);
+  if (error instanceof BaselineError) {
+    return { exitCode: error.exitCode, code: error.code, message };
+  }
   if (error instanceof StorageError) {
     if (error.code === "STALE_SOURCE" || error.code === "LOCKED") {
       return { exitCode: 3, code: error.code, message };

@@ -11,12 +11,14 @@ import {
   renameEntityCommand,
   showEntityCommand
 } from "./cli/handlers/entity.js";
+import { changesCommand } from "./cli/handlers/changes.js";
 import { contextCommand } from "./cli/handlers/context.js";
 import { addDecisionCommand, listDecisionsCommand, supersedeDecisionCommand } from "./cli/handlers/decision.js";
 import { addFactCommand, listFactsCommand, retractFactCommand } from "./cli/handlers/fact.js";
 import { addIssueCommand, dismissIssueCommand, listIssuesCommand, resolveIssueCommand } from "./cli/handlers/issue.js";
 import { knowledgeCommand } from "./cli/handlers/knowledge.js";
 import { importToolkitCommand, initToolkitCommand } from "./cli/handlers/project.js";
+import { snapshotCommand } from "./cli/handlers/snapshot.js";
 import { timelineCommand } from "./cli/handlers/timeline.js";
 import { defineCommands } from "./cli/registry.js";
 import { TASKS } from "./context/build.js";
@@ -199,11 +201,11 @@ const COMMAND_LIST = [
     summary: [
       "Compare chapters with an earlier draft: word changes,",
       "added and removed chapters, and unchanged paragraphs;",
-      "requires --ref or --against"
+      "requires --ref (a Git ref or a snapshot)"
     ],
     project: "positional",
-    run({ parsed, io, cwd, root }) {
-      const comparison = compareProject(root(), { ref: parsed.options.ref, against: parsed.options.against, cwd });
+    run({ parsed, io, root }) {
+      const comparison = compareProject(root(), { ref: parsed.options.ref });
       io.stdout.write(formatComparison(comparison, comparison.label));
       return reportResult(io, comparison, "Comparison complete", "Comparison failed");
     }
@@ -714,6 +716,50 @@ const COMMAND_LIST = [
       "story context --task plan --include arc_trust --max-bytes 20000"
     ],
     run: contextCommand
+  },
+  {
+    name: "snapshot",
+    path: ["snapshot"],
+    usage: "snapshot <name>",
+    summary: ["Save an explicit, immutable copy of the project files", "under .story/revisions/<name>/ as a comparison baseline"],
+    project: "discover",
+    mutates: true,
+    returnsResult: true,
+    strictOptions: true,
+    enforceArgs: true,
+    args: [{ name: "name", required: true }],
+    optionSchema: [
+      { name: "project" },
+      { name: "path" },
+      { name: "format", values: ["text", "json"] },
+      { name: "dry-run" }
+    ],
+    examples: ["story snapshot draft-1"],
+    run: snapshotCommand
+  },
+  {
+    name: "changes",
+    path: ["changes"],
+    usage: "changes --since <git-ref-or-snapshot> [--scope <json-file>]",
+    summary: ["Compare the project with a Git commit or snapshot by", "stable id and check declared edit ranges"],
+    project: "discover",
+    mutates: false,
+    returnsResult: true,
+    strictOptions: true,
+    enforceArgs: true,
+    optionSchema: [
+      { name: "project" },
+      { name: "path" },
+      { name: "format", values: ["text", "json"] },
+      { name: "since", required: true },
+      { name: "scope" }
+    ],
+    examples: [
+      "story changes --since main",
+      "story changes --since snapshot:draft-1",
+      "story changes --since git:v1.0 --scope dialogue-scope.json"
+    ],
+    run: changesCommand
   }
 ];
 

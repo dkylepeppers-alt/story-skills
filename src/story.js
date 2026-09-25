@@ -1,11 +1,11 @@
 import { Buffer } from "node:buffer";
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { checkContinuity, storyDateError, storyTimeError } from "./continuity.js";
 import { FRONTMATTER_PATTERN, parseFrontmatter, replaceFrontmatter, stringifyFrontmatter } from "./frontmatter.js";
 import { chapterProse, escapeRegExp, extractSection, kebabCase, titleCaseSlug, wordCount } from "./markdown.js";
 import { buildTimeline } from "./timeline.js";
+import { resolveBaseline } from "./changes/baseline.js";
 import { compareChapters, proseParagraphs } from "./compare.js";
 import { PROGRESS_FILE, cleanSessions, computeProgress, localDate, withSession } from "./progress.js";
 import { analyzeChapter, chapterFindings, proseRules, repeatedPhrases, similarNames } from "./prose.js";
@@ -1223,36 +1223,30 @@ export function computeWordCounts(root, options = {}) {
   };
 }
 
-// Compares the current chapters with an earlier draft: a git ref (read with
-// git show; nothing is written to the repository) or another copy of the
-// project on disk.
+// Compares the current chapters with an earlier draft read through
+// resolveBaseline: a Git commit (read from the object store; the working
+// tree, index and refs are untouched) or an explicit `story snapshot`. The
+// label names the resolved commit or snapshot hash. Copied project folders
+// (the former --against) are not baselines: they are not immutable.
 export function compareProject(root, options = {}) {
-  const hasRef = typeof options.ref === "string" && options.ref !== "";
-  const hasAgainst = typeof options.against === "string" && options.against !== "";
-  if (hasRef === hasAgainst) {
-    throw new Error("compare needs exactly one of --ref <git-ref> or --against <project-path>");
+  if (typeof options.ref !== "string" || options.ref === "") {
+    throw new Error("compare needs --ref <git-ref-or-snapshot>");
   }
   const project = scanProject(root);
   const current = project.chapters.map((chapter) => comparableChapter(chapter.id, readMarkdown(chapter.file, project.root)));
-  let previous;
-  let label;
-  if (hasRef) {
-    previous = chaptersAtGitRef(project.root, options.ref);
-    label = `git ref ${options.ref}`;
-  } else {
-    const otherRoot = path.resolve(options.cwd ?? process.cwd(), options.against);
-    const other = scanProject(otherRoot);
-    if (other.fileErrors.length > 0) {
-      throw new Error(`Cannot read ${otherRoot}: ${other.fileErrors[0]}`);
-    }
-    previous = other.chapters.map((chapter) => comparableChapter(chapter.id, readMarkdown(chapter.file, other.root)));
-    label = otherRoot;
-  }
+  const resolved = resolveBaseline(project.root, options.ref, { current: false });
+  const previous = [...resolved.files]
+    .filter(([file]) => file.startsWith("chapters/") && CHAPTER_FILENAME_PATTERN.test(file.slice("chapters/".length)))
+    .map(([file, bytes]) => baselineChapter(file.slice("chapters/".length), bytes.toString("utf8")));
+  const { baseline } = resolved;
   return {
     ok: project.fileErrors.length === 0,
     errors: [...project.fileErrors],
     warnings: [],
-    label,
+    label: baseline.kind === "git"
+      ? `git ref ${baseline.ref} (commit ${baseline.commit.slice(0, 12)})`
+      : `snapshot ${baseline.name} (hash ${baseline.hash.slice(0, 12)})`,
+    baseline,
     ...compareChapters(previous, current)
   };
 }
@@ -1267,43 +1261,14 @@ function comparableChapter(id, markdown) {
   };
 }
 
-// A ref may name a branch, tag, or commit with ~ and ^ suffixes, but never
-// starts with "-", so it cannot be read as a git option.
-const GIT_REF_PATTERN = /^[A-Za-z0-9._/@{}~^][A-Za-z0-9._/@{}~^-]*$/;
-
-function chaptersAtGitRef(root, ref) {
-  if (!GIT_REF_PATTERN.test(ref)) {
-    throw new Error(`Unsupported git ref: ${ref}`);
-  }
-  const git = (args) => execFileSync("git", ["-C", root, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 64 * 1024 * 1024 });
-  let prefix;
+function baselineChapter(name, raw) {
+  const id = path.basename(name, ".md");
   try {
-    prefix = git(["rev-parse", "--show-prefix"]).trim();
+    return comparableChapter(id, parseFrontmatter(raw, name));
   } catch {
-    throw new Error("compare --ref needs the project inside a git repository");
+    // An old draft may predate frontmatter; compare its prose anyway.
+    return comparableChapter(id, { data: {}, body: raw });
   }
-  try {
-    git(["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]);
-  } catch {
-    throw new Error(`Unknown git ref: ${ref}`);
-  }
-  // ls-tree paths are relative to the working directory (-C root); git show
-  // paths are relative to the repository root, hence the prefix there.
-  const names = git(["ls-tree", "--name-only", ref, "--", "chapters/"])
-    .split("\n")
-    .map((name) => path.posix.basename(name.trim()))
-    .filter((name) => CHAPTER_FILENAME_PATTERN.test(name))
-    .sort();
-  return names.map((name) => {
-    const id = path.basename(name, ".md");
-    const raw = git(["show", `${ref}:${prefix}chapters/${name}`]);
-    try {
-      return comparableChapter(id, parseFrontmatter(raw, name));
-    } catch {
-      // An old draft may predate frontmatter; compare its prose anyway.
-      return comparableChapter(id, { data: {}, body: raw });
-    }
-  });
 }
 
 // Word-count progress against story.md target-words and deadline, chapter
