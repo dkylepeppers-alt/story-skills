@@ -96,7 +96,9 @@ export function replaceFrontmatter(markdown, data, bodyOverride) {
 }
 
 function parseFrontmatterData(raw, filePath) {
-  const document = parseDocument(raw);
+  // The delimiter regex retains the final YAML newline in the closing
+  // delimiter. Restore it for block-scalar chomping semantics.
+  const document = parseDocument(`${raw}\n`);
   if (document.errors.length > 0) {
     const error = document.errors[0];
     const code = /must be unique/.test(error.message) ? "DUPLICATE_KEY" : "INVALID_YAML";
@@ -147,14 +149,13 @@ function scanBlocks(raw) {
       );
     }
 
-    const [, key, rest = ""] = pair;
+    const [, key] = pair;
     const blockLines = [line];
     index += 1;
-    if (rest === "" || /^[-|][+-]?$/.test(rest.trim())) {
-      // A key with no inline value opens a nested collection; a `|`/`>` rest
-      // opens a block scalar. Both continue on the following indented lines.
-      index = absorbIndented(lines, index, blockLines);
-    }
+    // YAML also permits folded scalars, indentation indicators, anchors,
+    // inline comments and multiline quoted/flow values. Their indented lines
+    // belong to the current entry regardless of the first line's value.
+    index = absorbIndented(lines, index, blockLines);
     blocks.push({ key, lines: blockLines, items: splitSequenceItems(blockLines) });
   }
 
@@ -205,12 +206,9 @@ function serializeEntry(key, value, block) {
       return spliceSequence(key, value, block.items);
     }
   }
-  if (Array.isArray(value) || (value !== null && typeof value === "object")) {
-    return yamlStringify({ [key]: value }, { lineWidth: 0 }).split("\n").filter((line) => line !== "");
-  }
-  const rendered = yamlStringify(value, { lineWidth: 0 }).replace(/\n+$/, "");
-  const [first, ...continuation] = rendered.split("\n");
-  return [`${key}: ${first}`, ...continuation];
+  // Serialize the complete mapping so YAML owns scalar indentation and
+  // chomping. Remove only the document terminator, not meaningful blank lines.
+  return yamlStringify({ [key]: value }, { lineWidth: 0 }).replace(/\n$/, "").split("\n");
 }
 
 // Re-emits a changed sequence by keeping the source lines of items whose
@@ -232,7 +230,7 @@ function spliceSequence(key, value, originalItems) {
 }
 
 function serializeItem(item) {
-  const rendered = yamlStringify(item, { lineWidth: 0 }).replace(/\n+$/, "");
+  const rendered = yamlStringify(item, { lineWidth: 0 }).replace(/\n$/, "");
   return rendered.split("\n").map((line, index) => (index === 0 ? `  - ${line}` : `    ${line}`));
 }
 
@@ -253,7 +251,7 @@ function splitSequenceItems(blockLines) {
     }
   }
   for (const item of items) {
-    const parsed = parseDocument(item.lines.join("\n"));
+    const parsed = parseDocument(`${item.lines.join("\n")}\n`);
     item.value = parsed.errors.length === 0 ? parsed.toJS() : undefined;
   }
   return items;

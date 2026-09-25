@@ -70,7 +70,7 @@ These workflows consolidate into ten core skills (`story-workflow`, `story-plann
 
 ## Companion CLI
 
-The `story` CLI handles deterministic project maintenance while the skills handle the creative work. It needs Node 22 or newer and has no runtime dependencies. From a checkout, use `bun install` and then `bun run story --help` (or `node bin/story.js`).
+The `story` CLI handles deterministic project maintenance while the skills handle the creative work. It needs Node 22 or newer; install the declared `yaml` and `ajv` runtime dependencies before running the source checkout. From a checkout, use `bun install` and then `bun run story --help` (or `node bin/story.js`).
 
 The CLI is for maintenance only. Agents write story content directly to markdown files and never create project-local build or generator scripts to emit the story.
 

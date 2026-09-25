@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import Ajv2020 from "ajv/dist/2020";
+import Ajv2020 from "ajv/dist/2020.js";
 import { FORMAT, SCHEMA_VERSION } from "../contracts.js";
 
 const SCHEMA_NAMES = [
@@ -56,7 +56,7 @@ export function resolveRecordSchema(record) {
   if (record === null || typeof record !== "object" || Array.isArray(record)) {
     return null;
   }
-  if (TYPE_SCHEMAS[record.type]) {
+  if (Object.hasOwn(TYPE_SCHEMAS, record.type)) {
     return TYPE_SCHEMAS[record.type];
   }
   return ENTITY_TYPES.has(record.type) ? "entity" : null;
@@ -77,6 +77,9 @@ export function validateDocument(data, name) {
  * by name; project-specific metadata belongs in `extensions`.
  */
 export function validateRecord(record) {
+  if (record && record.format === undefined && record["schema-version"] === 2) {
+    return checkFormatAndSchema(record, "project");
+  }
   const name = resolveRecordSchema(record);
   if (name === null) {
     return [diagnostic("UNKNOWN_RECORD_TYPE",
@@ -88,6 +91,12 @@ export function validateRecord(record) {
 
 function checkFormatAndSchema(record, name) {
   const diagnostics = [];
+  if (record === null || typeof record !== "object" || Array.isArray(record)) {
+    return [diagnostic("SCHEMA_VIOLATION", "Document must be an object", undefined, "Supply a record object.")];
+  }
+  if (!SCHEMA_NAMES.includes(name)) {
+    return [diagnostic("SCHEMA_VIOLATION", `Unknown schema: ${String(name)}`, record.id, "Select a documented schema name.")];
+  }
   if (record.format !== FORMAT) {
     if (record.format === undefined && record["schema-version"] === 2) {
       diagnostics.push(diagnostic("FORMAT_UPSTREAM_V2",

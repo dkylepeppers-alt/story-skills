@@ -5,7 +5,6 @@ import { StorageError } from "../contracts.js";
 import { sha256Hex } from "./hash.js";
 import { assertWritableTarget, resolveWithinRoot } from "./paths.js";
 
-const DEFAULT_LOCK_STALE_MS = 60_000;
 const ACTIONS = new Set(["create", "replace", "remove"]);
 
 /**
@@ -21,7 +20,8 @@ const ACTIONS = new Set(["create", "replace", "remove"]);
  * anything is staged, expected hashes are revalidated under the `.story` lock,
  * and each target's hash is rechecked immediately before its rename. If a
  * revalidation fails mid-set, already-applied files are restored from their
- * staged preimages and the transaction rejects with STALE_SOURCE.
+ * staged preimages only if they still match the transaction output. A later
+ * external edit is preserved and reported as ROLLBACK_CONFLICT.
  *
  * The lock only excludes other toolkit writers: an advisory lock cannot lock
  * out uncooperative external processes, which is why hashes are revalidated
@@ -36,9 +36,15 @@ export async function writeTransaction(root, writes, options = {}) {
     throw new StorageError("INVALID_WRITE", "A transaction needs a non-empty array of writes");
   }
 
+  root = fs.realpathSync(root);
   const plan = writes.map((write) => normalizeWrite(write));
   const seen = new Set();
   for (const write of plan) {
+    write.target = resolveWithinRoot(root, write.path);
+    write.path = path.relative(root, write.target);
+    if (write.path === ".story/lock" || write.path === ".story/transactions" || write.path.startsWith(`.story${path.sep}transactions${path.sep}`)) {
+      throw new StorageError("INVALID_WRITE", "Transaction control paths cannot appear in a write set");
+    }
     if (seen.has(write.path)) {
       throw new StorageError(
         "INVALID_WRITE",
@@ -46,8 +52,7 @@ export async function writeTransaction(root, writes, options = {}) {
       );
     }
     seen.add(write.path);
-    write.target = resolveWithinRoot(root, write.path);
-    assertWritableTarget(root, write.target);
+    assertSafeTarget(root, write.target);
   }
   for (const write of plan) {
     validatePrecondition(write, { baseline: true });
@@ -62,25 +67,39 @@ export async function writeTransaction(root, writes, options = {}) {
     };
   }
 
-  const lock = acquireLock(root, options);
+  // Validate internal storage too: otherwise a .story symlink redirects lock
+  // creation, preimage staging and recursive cleanup outside this project.
+  for (const relative of [".story/lock", ".story/transactions"]) {
+    assertSafeTarget(root, resolveWithinRoot(root, relative));
+  }
+  const lock = acquireLock(root);
   try {
     for (const write of plan) {
+      assertSafeTarget(root, write.target);
       validatePrecondition(write, { baseline: true });
     }
 
     const transactionId = `${Date.now().toString(36)}-${randomUUID()}`;
     const transactionDir = path.join(root, ".story", "transactions", transactionId);
-    stageTransaction(root, transactionDir, transactionId, plan);
+    const journal = stageTransaction(root, transactionDir, transactionId, plan);
 
     const applied = [];
     try {
       for (const write of plan) {
+        assertSafeTarget(root, write.target);
         validatePrecondition(write);
         applyWrite(write);
         applied.push(write);
+        journal.writes[applied.length - 1].applied = true;
+        fs.writeFileSync(path.join(transactionDir, "journal.json"), JSON.stringify(journal, null, 2));
       }
     } catch (error) {
-      rollbackApplied(applied);
+      const conflicts = rollbackApplied(root, applied);
+      if (conflicts.length > 0) {
+        throw new StorageError("ROLLBACK_CONFLICT", `Transaction ${transactionId} could not be fully rolled back; external edits were preserved. Inspect its journal before repair.`, {
+          transactionId, cause: error.code ?? "OPERATION_FAILED", conflicts
+        });
+      }
       if (error instanceof StorageError) {
         throw error;
       }
@@ -233,46 +252,53 @@ function validatePrecondition(write, { baseline = false } = {}) {
   }
 }
 
-function acquireLock(root, options) {
-  const lockPath = path.join(root, ".story", "lock");
-  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
-  const staleMs = typeof options.lockStaleMs === "number" ? options.lockStaleMs : DEFAULT_LOCK_STALE_MS;
-  const diagnostics = [];
-
-  for (let attempt = 0;; attempt += 1) {
+function assertSafeTarget(root, target) {
+  assertWritableTarget(root, target);
+  let current = root;
+  for (const part of path.relative(root, target).split(path.sep)) {
+    current = path.join(current, part);
     try {
-      const handle = fs.openSync(lockPath, "wx");
-      fs.writeFileSync(handle, JSON.stringify({ pid: process.pid, acquiredAt: Date.now() }));
-      fs.closeSync(handle);
-      return { lockPath, diagnostics };
+      if (fs.lstatSync(current).isSymbolicLink()) {
+        throw new StorageError("SYMLINK_TARGET", `Transaction paths must not contain symlinks: ${path.relative(root, current)}`);
+      }
     } catch (error) {
-      if (error.code !== "EEXIST") {
-        throw new StorageError("LOCK_FAILED", `Could not create the .story lock: ${error.message}`);
-      }
-      const stat = fs.statSync(lockPath);
-      if (Date.now() - stat.mtimeMs > staleMs && attempt < 2) {
-        diagnostics.push({
-          code: "LOCK_STALE_BROKEN",
-          severity: "warning",
-          message: `Broke a stale .story lock left ${Math.round((Date.now() - stat.mtimeMs) / 1000)}s ago by another writer.`,
-          recordIds: [],
-          sources: [],
-          evidence: "structural",
-          action: "If writes keep failing, inspect .story/transactions and run story repair."
-        });
-        fs.rmSync(lockPath, { force: true });
-        continue;
-      }
-      throw new StorageError(
-        "LOCKED",
-        "Another toolkit writer holds the .story lock; the project is locked while a transaction runs"
-      );
+      if (error.code === "ENOENT") return;
+      throw toStorageIoError(error, current, "validating path components in");
     }
   }
 }
 
+function acquireLock(root) {
+  const lockPath = path.join(root, ".story", "lock");
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  let handle;
+  try {
+    handle = fs.openSync(lockPath, "wx");
+  } catch (error) {
+    if (error.code === "EEXIST") {
+      // Age does not establish abandonment: a slow live writer still owns its
+      // lock. Recovery must inspect the owner/journal, never steal by timeout.
+      throw new StorageError("LOCKED", "Another writer or interrupted transaction holds .story/lock. Inspect the owner and transaction journals before removing an abandoned lock.");
+    }
+    throw toStorageIoError(error, lockPath, "acquiring the project lock");
+  }
+  const token = randomUUID();
+  try {
+    fs.writeFileSync(handle, JSON.stringify({ token, pid: process.pid, acquiredAt: Date.now() }));
+  } finally {
+    fs.closeSync(handle);
+  }
+  return { lockPath, token, diagnostics: [] };
+}
+
 function releaseLock(lock) {
-  fs.rmSync(lock.lockPath, { force: true });
+  try {
+    if (!fs.lstatSync(lock.lockPath).isFile()) return;
+    const current = JSON.parse(fs.readFileSync(lock.lockPath, "utf8"));
+    if (current.token === lock.token) fs.unlinkSync(lock.lockPath);
+  } catch (error) {
+    if (error.code !== "ENOENT") throw toStorageIoError(error, lock.lockPath, "releasing the project lock");
+  }
 }
 
 function stageTransaction(root, transactionDir, transactionId, plan) {
@@ -283,7 +309,7 @@ function stageTransaction(root, transactionDir, transactionId, plan) {
 
     const journal = { id: transactionId, createdAt: new Date().toISOString(), root, writes: [] };
     for (const [index, write] of plan.entries()) {
-      const entry = { path: write.path, action: write.action, expectedHash: write.expectedHash };
+      const entry = { path: write.path, action: write.action, expectedHash: write.expectedHash, resultHash: write.content === null ? null : sha256Hex(write.content), applied: false };
       if (write.action !== "create" && fs.existsSync(write.target)) {
         write.preimage = path.join(transactionDir, "preimages", String(index));
         entry.preimage = `preimages/${index}`;
@@ -305,6 +331,7 @@ function stageTransaction(root, transactionDir, transactionId, plan) {
       journal.writes.push(entry);
     }
     fs.writeFileSync(path.join(transactionDir, "journal.json"), JSON.stringify(journal, null, 2));
+    return journal;
   } catch (error) {
     if (error instanceof StorageError) {
       throw error;
@@ -325,19 +352,30 @@ function applyWrite(write) {
   }
 }
 
-function rollbackApplied(applied) {
-  for (const write of applied.reverse()) {
+function rollbackApplied(root, applied) {
+  const conflicts = [];
+  for (const write of [...applied].reverse()) {
     try {
-      if (write.preimage) {
-        fs.copyFileSync(write.preimage, write.target);
-      } else if (write.action === "create") {
-        fs.rmSync(write.target, { force: true });
+      assertSafeTarget(root, write.target);
+      if (write.action === "remove") {
+        if (fs.existsSync(write.target)) throw new Error("Removed target was recreated externally");
+      } else {
+        const current = sha256Hex(fs.readFileSync(write.target));
+        if (current !== sha256Hex(write.content)) throw new Error("Applied target changed externally");
       }
-    } catch {
-      // Best effort: rollback surfaces its own failure through the thrown
-      // StorageError below; a broken rollback leaves the journal for repair.
+      if (write.preimage) {
+        // Restore with rename, retaining the original preimage for recovery.
+        const stagedRestore = `${write.preimage}.restore`;
+        fs.copyFileSync(write.preimage, stagedRestore);
+        fs.renameSync(stagedRestore, write.target);
+      } else if (write.action === "create") {
+        fs.unlinkSync(write.target);
+      }
+    } catch (error) {
+      conflicts.push({ path: write.path, message: error.message });
     }
   }
+  return conflicts;
 }
 
 function summarizeWrite(write) {

@@ -176,9 +176,8 @@ describe("source-preserving storage", () => {
     const lockPath = path.join(p.root, ".story", "lock");
     const stale = new Date(Date.now() - 120_000);
     fs.utimesSync(lockPath, stale, stale);
-    const result = await writeTransaction(p.root, p.twoFileReplacement(), {});
-    expect(result.ok).toBe(true);
-    expect(result.diagnostics.map((diagnostic) => diagnostic.code)).toEqual(["LOCK_STALE_BROKEN"]);
+    await expect(writeTransaction(p.root, p.twoFileReplacement(), {})).rejects.toMatchObject({ code: "LOCKED" });
+    expect(p.read("story.md")).toBe(p.initial("story.md"));
   });
 
   test("a missing replace target is an actionable diagnostic", async () => {

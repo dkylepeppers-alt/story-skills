@@ -7162,7 +7162,8 @@ function replaceFrontmatter(markdown, data, bodyOverride) {
   return `${opening}${body}${closing}${rest}`;
 }
 function parseFrontmatterData(raw, filePath) {
-  const document = $parseDocument(raw);
+  const document = $parseDocument(`${raw}
+`);
   if (document.errors.length > 0) {
     const error = document.errors[0];
     const code = /must be unique/.test(error.message) ? "DUPLICATE_KEY" : "INVALID_YAML";
@@ -7197,12 +7198,10 @@ function scanBlocks(raw) {
     if (!pair) {
       throw new StorageError("INVALID_FRONTMATTER", `Cannot edit frontmatter with unsupported line layout: ${line}`);
     }
-    const [, key, rest = ""] = pair;
+    const [, key] = pair;
     const blockLines = [line];
     index += 1;
-    if (rest === "" || /^[-|][+-]?$/.test(rest.trim())) {
-      index = absorbIndented(lines, index, blockLines);
-    }
+    index = absorbIndented(lines, index, blockLines);
     blocks.push({ key, lines: blockLines, items: splitSequenceItems(blockLines) });
   }
   return blocks;
@@ -7246,14 +7245,8 @@ function serializeEntry(key, value, block) {
       return spliceSequence(key, value, block.items);
     }
   }
-  if (Array.isArray(value) || value !== null && typeof value === "object") {
-    return $stringify({ [key]: value }, { lineWidth: 0 }).split(`
-`).filter((line) => line !== "");
-  }
-  const rendered = $stringify(value, { lineWidth: 0 }).replace(/\n+$/, "");
-  const [first, ...continuation] = rendered.split(`
+  return $stringify({ [key]: value }, { lineWidth: 0 }).replace(/\n$/, "").split(`
 `);
-  return [`${key}: ${first}`, ...continuation];
 }
 function spliceSequence(key, value, originalItems) {
   const lines = [`${key}:`];
@@ -7270,7 +7263,7 @@ function spliceSequence(key, value, originalItems) {
   return lines;
 }
 function serializeItem(item) {
-  const rendered = $stringify(item, { lineWidth: 0 }).replace(/\n+$/, "");
+  const rendered = $stringify(item, { lineWidth: 0 }).replace(/\n$/, "");
   return rendered.split(`
 `).map((line, index) => index === 0 ? `  - ${line}` : `    ${line}`);
 }
@@ -7287,8 +7280,9 @@ function splitSequenceItems(blockLines) {
     }
   }
   for (const item of items) {
-    const parsed = $parseDocument(item.lines.join(`
-`));
+    const parsed = $parseDocument(`${item.lines.join(`
+`)}
+`);
     item.value = parsed.errors.length === 0 ? parsed.toJS() : undefined;
   }
   return items;

@@ -23,8 +23,8 @@ const MARKER_LOOKALIKE_PATTERN = /<!--\s*story-(?:scene|beat):/;
  * scene or beat span. Beat spans end at the next beat marker within the scene
  * or at the scene span's end.
  *
- * Spans operate on the decoded UTF-8 text of the file body; hashing encodes
- * exactly the selected substring, so hashes always cover actual source bytes.
+ * Marker offsets are UTF-8 byte offsets into the body. Selections slice the
+ * original Buffer so offsets and hashes use exactly the same source bytes.
  */
 
 export function findMarkers(body) {
@@ -53,18 +53,18 @@ export function findMarkers(body) {
         action: "Rewrite the marker as <!-- story-scene: <scene-id> --> or <!-- story-beat: <beat-id> --> with a lowercase id."
       });
     }
-    offset += line.length;
+    offset += Buffer.byteLength(line, "utf8");
   }
 
   for (const scene of scenes) {
     const next = scenes.find((other) => other.start > scene.start);
-    scene.end = next ? next.start : body.length;
+    scene.end = next ? next.start : Buffer.byteLength(body, "utf8");
   }
   for (const beat of beats) {
     const containingScene = [...scenes].reverse().find((scene) => scene.start <= beat.start);
     const nextBeat = beats.find((other) => other.start > beat.start
       && (!containingScene || other.start < containingScene.end));
-    beat.end = nextBeat ? nextBeat.start : containingScene ? containingScene.end : body.length;
+    beat.end = nextBeat ? nextBeat.start : containingScene ? containingScene.end : Buffer.byteLength(body, "utf8");
   }
 
   return { scenes, beats, diagnostics };
@@ -86,8 +86,8 @@ export function stripMarkers(text) {
  * sceneId the selection is a body span (frontmatter excluded) per the marker
  * convention above; without one the whole file — frontmatter included — is
  * the selected source, so any edit marks the reference stale. `start`/`end`
- * are offsets in the decoded file text; `bytes` carries the exact UTF-8
- * encoding of the selected span, which is what hashing covers.
+ * are UTF-8 byte offsets in the original file; `bytes` is the original
+ * byte slice, which is what hashing covers.
  */
 export function readSourceSpan(root, ref) {
   const absPath = resolveWithinRoot(root, ref.path);
@@ -100,7 +100,7 @@ export function readSourceSpan(root, ref) {
 
   const frontmatter = FRONTMATTER_PATTERN.exec(text);
   const body = frontmatter ? text.slice(frontmatter[0].length) : text;
-  const bodyOffset = frontmatter ? frontmatter[0].length : 0;
+  const bodyOffset = frontmatter ? Buffer.byteLength(frontmatter[0], "utf8") : 0;
   const markers = findMarkers(body);
 
   const scene = markers.scenes.find((marker) => marker.id === ref.sceneId);
@@ -109,8 +109,8 @@ export function readSourceSpan(root, ref) {
   }
 
   if (!ref.beatId) {
-    const span = body.slice(scene.start, scene.end);
-    return { text: span, bytes: Buffer.from(span, "utf8"), start: bodyOffset + scene.start, end: bodyOffset + scene.end };
+    const span = bytes.subarray(bodyOffset + scene.start, bodyOffset + scene.end);
+    return { text: span.toString("utf8"), bytes: span, start: bodyOffset + scene.start, end: bodyOffset + scene.end };
   }
 
   const beat = markers.beats.find((marker) => marker.id === ref.beatId
@@ -118,6 +118,6 @@ export function readSourceSpan(root, ref) {
   if (!beat) {
     throw new StorageError("BEAT_NOT_FOUND", `No beat marker ${ref.beatId} in scene ${ref.sceneId} of ${ref.path}`);
   }
-  const span = body.slice(beat.start, beat.end);
-  return { text: span, bytes: Buffer.from(span, "utf8"), start: bodyOffset + beat.start, end: bodyOffset + beat.end };
+  const span = bytes.subarray(bodyOffset + beat.start, bodyOffset + beat.end);
+  return { text: span.toString("utf8"), bytes: span, start: bodyOffset + beat.start, end: bodyOffset + beat.end };
 }
