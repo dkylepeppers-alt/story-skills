@@ -182,7 +182,7 @@ The tests use public storage functions and explicit fixture helpers; define `set
 - [x] Implement discovery and initialization without overwriting an existing project. Create only required folders. Assign immutable opaque IDs; enforce uniqueness, including imported IDs.
 - [x] Implement all entity types in the command matrix. Rename display name/path while preserving identity and updating structural links. `remove --policy refuse` reports dependencies; `detach` removes optional structural references and records consequences, never silently rewrites prose or retargets facts. Required semantic references still block removal until an explicit reconciliation proposal resolves them; deletion must leave a schema-valid project.
 - [x] Port Markdown import, heading detection and natural chapter ordering. Import into a new directory only; ambiguous scene breaks produce a finding. Optional old-format conversion may be a separate explicit adapter, never a prerequisite for the fresh design.
-- [x] Register commands as their handlers land in subsequent tasks; require the complete registry by Task 21. No hidden success stubs for unimplemented commands.
+- [ ] Register commands as their handlers land in subsequent tasks; require the complete registry by Task 21. No hidden success stubs for unimplemented commands.
 
 ```js
 test('rename preserves identity and manuscript wording', async () => {
