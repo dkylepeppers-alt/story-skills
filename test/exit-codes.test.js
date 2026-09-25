@@ -21,7 +21,7 @@ describe("exit codes", () => {
     const p = await makeProject();
     await p.addEntity({ id: "chr_ada", type: "character", name: "Ada" });
     const text = invoke(p.root, ["entity", "show", "chr_ada"]);
-    const json = invoke(p.root, ["entity", "show", "chr_ada", "--json"]);
+    const json = invoke(p.root, ["entity", "show", "chr_ada", "--format", "json"]);
     expect(text.code).toBe(0);
     expect(json.code).toBe(0);
     expect(envelope(json).ok).toBe(true);
@@ -32,7 +32,7 @@ describe("exit codes", () => {
     const cwd = makeTempDir();
     expect(invoke(cwd, ["init", "Exit One"]).code).toBe(0);
     const text = invoke(cwd, ["init", "Exit One"]);
-    const json = invoke(cwd, ["init", "Exit One", "--json"]);
+    const json = invoke(cwd, ["init", "Exit One", "--format", "json"]);
     expect(text.code).toBe(1);
     expect(json.code).toBe(1);
     expect(text.err).toContain("already exists");
@@ -47,7 +47,7 @@ describe("exit codes", () => {
     await refused.addEntity({ id: "chr_ada", type: "character", name: "Ada" });
     await refused.addScene({ id: "scn_door", title: "Door", cast: ["chr_ada"] });
     const refuseText = invoke(refused.root, ["entity", "remove", "chr_ada", "--policy", "refuse"]);
-    const refuseJson = invoke(refused.root, ["entity", "remove", "chr_ada", "--policy", "refuse", "--json"]);
+    const refuseJson = invoke(refused.root, ["entity", "remove", "chr_ada", "--policy", "refuse", "--format", "json"]);
     expect(refuseText.code).toBe(1);
     expect(refuseJson.code).toBe(1);
     expect(envelope(refuseJson).diagnostics[0].code).toBe("REFERENCE_PRESENT");
@@ -57,7 +57,7 @@ describe("exit codes", () => {
     await detached.addEntity({ id: "chr_ada", type: "character", name: "Ada" });
     await detached.addFact({ id: "fact_home", subject: "chr_ada", predicate: "location", value: "the pier" });
     const detachText = invoke(detached.root, ["entity", "remove", "chr_ada", "--policy", "detach"]);
-    const detachJson = invoke(detached.root, ["entity", "remove", "chr_ada", "--policy", "detach", "--json"]);
+    const detachJson = invoke(detached.root, ["entity", "remove", "chr_ada", "--policy", "detach", "--format", "json"]);
     expect(detachText.code).toBe(1);
     expect(detachJson.code).toBe(1);
     expect(detachText.code).toBe(refuseText.code);
@@ -69,20 +69,20 @@ describe("exit codes", () => {
   test("exit 2 is an invalid invocation in text and json", () => {
     const cwd = makeTempDir();
     const unknownText = invoke(cwd, ["nope"]);
-    const unknownJson = invoke(cwd, ["nope", "--json"]);
+    const unknownJson = invoke(cwd, ["nope", "--format", "json"]);
     expect(unknownText.code).toBe(2);
     expect(unknownJson.code).toBe(2);
     expect(envelope(unknownJson).diagnostics[0].code).toBe("INVALID_INVOCATION");
 
     const missingText = invoke(cwd, ["add", "chapter", "Foo", "--number"]);
-    const missingJson = invoke(cwd, ["add", "chapter", "Foo", "--number", "--json"]);
+    const missingJson = invoke(cwd, ["add", "chapter", "Foo", "--number", "--format", "json"]);
     expect(missingText.code).toBe(2);
     expect(missingJson.code).toBe(2);
     expect(missingText.err).toContain("Missing value for --number");
     expect(envelope(missingJson).diagnostics[0].message).toContain("Missing value for --number");
 
     const initText = invoke(cwd, ["init", "Nope", "--path", "somewhere"]);
-    const initJson = invoke(cwd, ["init", "Nope", "--path", "somewhere", "--json"]);
+    const initJson = invoke(cwd, ["init", "Nope", "--path", "somewhere", "--format", "json"]);
     expect(initText.code).toBe(2);
     expect(initJson.code).toBe(2);
     expect(initText.err).toContain("init uses --dir");
@@ -120,7 +120,7 @@ describe("exit codes", () => {
       return real(filePath, ...args);
     });
     try {
-      const json = invoke(p.root, ["entity", "remove", "chr_ada", "--policy", "detach", "--json"]);
+      const json = invoke(p.root, ["entity", "remove", "chr_ada", "--policy", "detach", "--format", "json"]);
       expect(json.code).toBe(3);
       expect(envelope(json).diagnostics[0].code).toBe("STALE_SOURCE");
     } finally {
@@ -159,7 +159,7 @@ describe("exit codes", () => {
     }
     const jsonSpy = install();
     try {
-      const json = invoke(p.root, ["entity", "remove", "chr_ada", "--policy", "detach", "--json"]);
+      const json = invoke(p.root, ["entity", "remove", "chr_ada", "--policy", "detach", "--format", "json"]);
       expect(json.code).toBe(4);
       const parsed = envelope(json);
       expect(parsed.diagnostics[0].code).toBe("OPERATION_FAILED");
@@ -175,7 +175,7 @@ describe("exit codes", () => {
     await p.addEntity({ id: "chr_ada", type: "character", name: "Ada" });
     await p.addEntity({ id: "chr_bee", type: "character", name: "Bee" });
     await p.addScene({ id: "scn_door", title: "Door", cast: ["chr_ada", "chr_bee"] });
-    const result = invoke(p.root, ["entity", "remove", "chr_ada", "--policy", "detach", "--json"]);
+    const result = invoke(p.root, ["entity", "remove", "chr_ada", "--policy", "detach", "--format", "json"]);
     expect(result.code).toBe(0);
     expect(envelope(result).diagnostics[0].code).toBe("REFERENCE_DETACHED");
     expect(result.err).toContain("Detached");

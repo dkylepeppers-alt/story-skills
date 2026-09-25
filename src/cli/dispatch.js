@@ -138,7 +138,7 @@ export function runCli(argv, io) {
   let commandName = "";
   try {
     const parsed = parseArgs(argv);
-    json = isTruthy(parsed.options.json);
+    json = lastOptionValue(parsed.options.format) === "json";
     const cwd = io.cwd ?? process.cwd();
     commandName = parsed.positionals[0] ?? "";
 

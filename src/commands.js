@@ -368,7 +368,7 @@ const COMMAND_LIST = [
     run({ parsed, io, root }) {
       const result = buildBook(root(), {
         out: parsed.options.out,
-        format: parsed.options.format,
+        format: buildKind(parsed.options.format),
         shunn: isTruthy(parsed.options.shunn)
       });
       io.stdout.write(`Built ${result.chapters} chapters as ${result.format} to ${result.outFile}\n`);
@@ -407,7 +407,7 @@ const COMMAND_LIST = [
     optionSchema: [
       { name: "project" },
       { name: "path" },
-      { name: "json" },
+      { name: "format", values: ["text", "json"] },
       { name: "dry-run" },
       { name: "chapter" }
     ],
@@ -431,7 +431,7 @@ const COMMAND_LIST = [
     optionSchema: [
       { name: "project" },
       { name: "path" },
-      { name: "json" },
+      { name: "format", values: ["text", "json"] },
       { name: "dry-run" }
     ],
     examples: ["story entity rename chr_ada Adaline"],
@@ -451,7 +451,7 @@ const COMMAND_LIST = [
     optionSchema: [
       { name: "project" },
       { name: "path" },
-      { name: "json" },
+      { name: "format", values: ["text", "json"] },
       { name: "dry-run" },
       { name: "policy", required: true, values: ["refuse", "detach"] }
     ],
@@ -472,7 +472,7 @@ const COMMAND_LIST = [
     optionSchema: [
       { name: "project" },
       { name: "path" },
-      { name: "json" }
+      { name: "format", values: ["text", "json"] }
     ],
     examples: ["story entity show chr_ada"],
     run: showEntityCommand
@@ -480,6 +480,12 @@ const COMMAND_LIST = [
 ];
 
 export const COMMANDS = defineCommands(COMMAND_LIST);
+
+function buildKind(value) {
+  const format = Array.isArray(value) ? value[value.length - 1] : value;
+  if (format === "text" || format === "json") return undefined;
+  return format;
+}
 
 function collectThemes(options) {
   return []

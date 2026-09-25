@@ -274,7 +274,7 @@ describe("story-toolkit projects", () => {
     const p = await makeProject();
     const before = new Set(fs.readdirSync(p.root, { recursive: true }).map(String));
     for (const type of ENTITY_TYPES) {
-      const argv = ["entity", "add", type, `Sample ${type}`, "--json"];
+      const argv = ["entity", "add", type, `Sample ${type}`, "--format", "json"];
       if (type === "scene") argv.push("--chapter", "chp_one");
       const result = invoke(p.root, argv);
       expect(result.code).toBe(0);
@@ -298,14 +298,14 @@ describe("story-toolkit projects", () => {
       "sample-faction.md", "sample-location.md", "sample-object.md", "sample-system.md"
     ]);
 
-    const dry = invoke(p.root, ["entity", "add", "character", "Ghost", "--dry-run", "--json"]);
+    const dry = invoke(p.root, ["entity", "add", "character", "Ghost", "--dry-run", "--format", "json"]);
     expect(dry.code).toBe(0);
     expect(JSON.parse(dry.out).data.dryRun).toBe(true);
     expect(fs.existsSync(path.join(p.root, "characters", "ghost.md"))).toBe(false);
-    const missingScene = invoke(p.root, ["entity", "add", "scene", "Nowhere", "--json"]);
+    const missingScene = invoke(p.root, ["entity", "add", "scene", "Nowhere", "--format", "json"]);
     expect(missingScene.code).toBe(2);
     expect(JSON.parse(missingScene.out).diagnostics[0].code).toBe("INVALID_INVOCATION");
-    const unknown = invoke(p.root, ["entity", "add", "widget", "Nope", "--json"]);
+    const unknown = invoke(p.root, ["entity", "add", "widget", "Nope", "--format", "json"]);
     expect(unknown.code).toBe(2);
     expect(JSON.parse(unknown.out).diagnostics[0].code).toBe("UNKNOWN_ENTITY_TYPE");
     expect(before.has("characters")).toBe(false);

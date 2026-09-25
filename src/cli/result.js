@@ -55,22 +55,12 @@ export function present(ctx, finished) {
 }
 
 export function argvRequestsJson(argv) {
-  let enabled = false;
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    if (arg === "--json") {
-      const next = argv[index + 1];
-      if (typeof next === "string" && /^(true|false|0|1|yes|no|on|off)$/i.test(next)) {
-        enabled = !/^(false|0|no|off)$/i.test(next);
-        index += 1;
-      } else {
-        enabled = true;
-      }
-    } else if (arg.startsWith("--json=")) {
-      enabled = !/^(false|0|no|off)$/i.test(arg.slice("--json=".length));
-    }
+    if (arg === "--format" && argv[index + 1] === "json") return true;
+    if (arg === "--format=json") return true;
   }
-  return enabled;
+  return false;
 }
 
 export function invocationEnvelope(command, message) {

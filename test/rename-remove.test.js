@@ -184,7 +184,7 @@ describe("story-toolkit remove policy", () => {
     await p.addFact({ id: "fact_bee_sees", subject: "chr_bee", predicate: "sees", value: "chr_ada" });
     const before = snapshot(p.root);
     const io = memoryIo(p.root);
-    const code = runCli(["entity", "remove", "chr_ada", "--policy", "detach", "--json"], io);
+    const code = runCli(["entity", "remove", "chr_ada", "--policy", "detach", "--format", "json"], io);
     const stdout = io.output();
 
     expect(code).toBe(1);
@@ -207,7 +207,7 @@ describe("story-toolkit remove policy", () => {
     const before = snapshot(p.root);
     const io = memoryIo(p.root);
 
-    expect(runCli(["entity", "remove", "chp_one", "--policy", "detach", "--json"], io)).toBe(1);
+    expect(runCli(["entity", "remove", "chp_one", "--policy", "detach", "--format", "json"], io)).toBe(1);
     const parsed = JSON.parse(io.output());
     expect(parsed.ok).toBe(false);
     expect(parsed.diagnostics[0].code).toBe("REQUIRED_REFERENCE");
@@ -225,7 +225,7 @@ describe("story-toolkit remove policy", () => {
     const prose = p.read("chapters/one.md");
     const io = memoryIo(p.root);
 
-    expect(runCli(["entity", "remove", "chr_ada", "--policy", "detach", "--json"], io)).toBe(0);
+    expect(runCli(["entity", "remove", "chr_ada", "--policy", "detach", "--format", "json"], io)).toBe(0);
     const parsed = JSON.parse(io.output());
     expect(parsed.ok).toBe(true);
     expect(parsed.diagnostics.map((item) => item.code)).toEqual(["REFERENCE_DETACHED"]);
@@ -245,7 +245,7 @@ describe("story-toolkit remove policy", () => {
     const before = snapshot(p.root);
     const io = memoryIo(p.root);
 
-    expect(runCli(["entity", "remove", "chr_ada", "--policy", "refuse", "--json"], io)).toBe(1);
+    expect(runCli(["entity", "remove", "chr_ada", "--policy", "refuse", "--format", "json"], io)).toBe(1);
     const parsed = JSON.parse(io.output());
     expect(parsed.ok).toBe(false);
     expect(parsed.diagnostics[0].code).toBe("REFERENCE_PRESENT");
